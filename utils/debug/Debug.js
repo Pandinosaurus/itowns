@@ -29,7 +29,7 @@ function Debug(view, datDebugTool, chartDivContainer) {
     this.chartDivContainer = chartDivContainer;
     const canvas = this.createChartContainer('three-info');
 
-    var ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d');
 
     this.charts = [];
 
@@ -97,23 +97,27 @@ function Debug(view, datDebugTool, chartDivContainer) {
     // camera-target-updated event
     let LatController;
     let LongController;
+    let AltiController;
     let eventFolder;
     const controls = view.controls;
     initialPosition.crs = view.referenceCrs;
     const cursorWorldPosition = new THREE.Vector3();
 
-    const getCenter = (controls && controls.getCameraTargetPosition) ? controls.getCameraTargetPosition : () => view.camera.camera3D.position;
+    const getCenter = (controls && controls.getCameraTargetPosition) ? controls.getCameraTargetPosition : () => view.camera3D.position;
     const cameraTargetListener = (event) => {
         if (view.getPickingPositionFromDepth(view.eventToViewCoords(event), cursorWorldPosition)) {
             initialPosition.setFromVector3(cursorWorldPosition).as('EPSG:4326', geoPosition);
             state.latitude = `${geoPosition.y.toFixed(6)}`;
             state.longitude = `${geoPosition.x.toFixed(6)}`;
+            state.altitude = `${geoPosition.z.toFixed(2)}`;
         } else {
             state.latitude = '---------';
             state.longitude = '---------';
+            state.altitude = '---------';
         }
         LatController.updateDisplay();
         LongController.updateDisplay();
+        AltiController.updateDisplay();
     };
 
     gui.add(state, 'eventsDebug').name('Debug event').onChange((() => (newValue) => {
@@ -124,8 +128,11 @@ function Debug(view, datDebugTool, chartDivContainer) {
             initialPosition.setFromVector3(getCenter()).as('EPSG:4326', geoPosition);
             state.latitude = `${geoPosition.y.toFixed(6)}`;
             state.longitude = `${geoPosition.x.toFixed(6)}`;
+            state.altitude = `${geoPosition.z.toFixed(2)}`;
+
             LatController = eventFolder.add(state, 'latitude');
             LongController = eventFolder.add(state, 'longitude');
+            AltiController = eventFolder.add(state, 'altitude');
 
             view.domElement.addEventListener('mousemove', cameraTargetListener);
         } else {
@@ -135,8 +142,8 @@ function Debug(view, datDebugTool, chartDivContainer) {
     })());
 
     // Camera debug
-    const helper = new CameraHelper(view.camera.camera3D);
-    const debugCamera = view.camera.camera3D.clone();
+    const helper = new CameraHelper(view.camera3D);
+    const debugCamera = view.camera3D.clone();
     debugCamera.fov *= 1.5;
     debugCamera.updateProjectionMatrix();
     const g = view.mainLoop.gfxEngine;
@@ -169,8 +176,10 @@ function Debug(view, datDebugTool, chartDivContainer) {
             const ratio = 0.25;
             const size = { x: g.width * ratio, y: g.height * ratio };
             debugCamera.aspect = size.x / size.y;
-            const camera = view.camera.camera3D;
-            const coord = new Coordinates(view.referenceCrs, camera.position).as(tileLayer.extent.crs);
+            const camera = view.camera3D;
+            const coord = new Coordinates(view.referenceCrs)
+                .setFromVector3(camera.position)
+                .as(tileLayer.extent.crs);
             const extent = view.tileLayer.info.displayed.extent;
             displayedTilesObb.setFromExtent(extent);
             displayedTilesObbHelper.visible = true;
@@ -178,7 +187,7 @@ function Debug(view, datDebugTool, chartDivContainer) {
 
             // Note Method to compute near and far...
             // const bbox = displayedTilesObb.box3D.clone().applyMatrix4(displayedTilesObb.matrixWorld);
-            // const distance = bbox.distanceToPoint(view.camera.camera3D.position);
+            // const distance = bbox.distanceToPoint(view.camera3D.position);
             // console.log('distance', distance, distance + bbox.getBoundingSphere(sphere).radius * 2);
 
             // Compute position camera debug
@@ -190,7 +199,7 @@ function Debug(view, datDebugTool, chartDivContainer) {
             debugCamera.position.z += altitudeCameraDebug;
             camera.localToWorld(debugCamera.position);
             // Compute target camera debug
-            lookAtCameraDebug.copy(view.camera.camera3D.position);
+            lookAtCameraDebug.copy(view.camera3D.position);
             camera.worldToLocal(lookAtCameraDebug);
             lookAtCameraDebug.z -= altitudeCameraDebug * 1.5;
             camera.localToWorld(lookAtCameraDebug);

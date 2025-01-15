@@ -15,7 +15,6 @@ export const deprecatedColorLayerOptions = (options) => {
 };
 
 export const deprecatedParsingOptionsToNewOne = (options) => {
-    /* istanbul ignore next */
     if (options.crsOut || options.crsIn) {
         console.warn('Parsing options with crsIn and crsOut are deprecated, use { in, out } structure.');
         const newOptions = { in: {}, out: {} };
@@ -71,6 +70,12 @@ export const deprecatedFeature2MeshOptions = (options) => {
 
     if (options.altitude) {
         console.error('altitude convert option is removed, use Style.xxx.base_altitude instead');
+    }
+};
+
+export const deprecatedC3DEngineWebGLOptions = (options) => {
+    if (options.isWebGL2 === false) {
+        console.error('WebGL1 support ended in 2.43.0. Falling-back to the WebGL2 renderer.');
     }
 };
 

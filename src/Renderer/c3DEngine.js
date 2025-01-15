@@ -7,13 +7,15 @@
 import * as THREE from 'three';
 import Capabilities from 'Core/System/Capabilities';
 import { unpack1K } from 'Renderer/LayeredMaterial';
-import { WEBGL } from 'ThreeExtended/WebGL';
+import WEBGL from 'ThreeExtended/capabilities/WebGL';
 import Label2DRenderer from 'Renderer/Label2DRenderer';
+import { deprecatedC3DEngineWebGLOptions } from 'Core/Deprecated/Undeprecator';
 
 const depthRGBA = new THREE.Vector4();
 class c3DEngine {
     constructor(rendererOrDiv, options = {}) {
-        const NOIE = !Capabilities.isInternetExplorer();
+        deprecatedC3DEngineWebGLOptions(options);
+
         // pick sensible default options
         if (options.antialias === undefined) {
             options.antialias = true;
@@ -22,15 +24,22 @@ class c3DEngine {
             options.alpha = true;
         }
         if (options.logarithmicDepthBuffer === undefined) {
-            options.logarithmicDepthBuffer = this.gLDebug || NOIE;
+            options.logarithmicDepthBuffer = true;
         }
 
-        if (options.isWebGL2 === undefined) {
-            options.isWebGL2 = true;
+        // If rendererOrDiv parameter is a domElement, we use it as support to display data.
+        // If it is a renderer, we check the renderer.domElement parameter which can be :
+        //    - a domElement, in this case we use this domElement as a support
+        //    - a canvas, in this case we use the canvas parent (which should be a domElement) as a support
+        let renderer;
+        let viewerDiv;
+        if (rendererOrDiv.domElement) {
+            renderer = rendererOrDiv;
+            viewerDiv = renderer.domElement instanceof HTMLDivElement ?
+                renderer.domElement : renderer.domElement.parentElement;
+        } else {
+            viewerDiv = rendererOrDiv;
         }
-
-        const renderer = rendererOrDiv.domElement ? rendererOrDiv : undefined;
-        const viewerDiv = renderer ? renderer.domElement : rendererOrDiv;
 
         this.width = viewerDiv.clientWidth;
         this.height = viewerDiv.clientHeight;
@@ -47,10 +56,17 @@ class c3DEngine {
 
         this.renderView = function _(view) {
             this.renderer.clear();
-            this.renderer.render(view.scene, view.camera.camera3D);
-            this.label2dRenderer.render(view.scene, view.camera.camera3D);
+            this.renderer.render(view.scene, view.camera3D);
+            if (view.tileLayer) {
+                this.label2dRenderer.render(view.tileLayer.object3d, view.camera3D);
+            }
         }.bind(this);
 
+        /**
+         * @type {function}
+         * @param {number} w
+         * @param {number} h
+         */
         this.onWindowResize = function _(w, h) {
             this.width = w;
             this.height = h;
@@ -65,7 +81,7 @@ class c3DEngine {
             this.label2dRenderer.setSize(this.width, this.height);
             viewerDiv.appendChild(this.label2dRenderer.domElement);
 
-            this.renderer = renderer || new (options.isWebGL2 ? THREE.WebGLRenderer : THREE.WebGL1Renderer)({
+            this.renderer = renderer || new THREE.WebGLRenderer({
                 canvas: document.createElement('canvas'),
                 antialias: options.antialias,
                 alpha: options.alpha,
@@ -75,33 +91,10 @@ class c3DEngine {
             this.renderer.domElement.style.zIndex = 0;
             this.renderer.domElement.style.top = 0;
         } catch (ex) {
-            const versionWebGL = options.isWebGL2 ? '2' : '1';
-            console.error(`Failed to create WebGLRenderer webGL ${versionWebGL}.`);
-            this.renderer = null;
-        }
-
-        if (!this.renderer) {
-            if (!WEBGL.isWebGLAvailable()) {
-                viewerDiv.appendChild(WEBGL.getErrorMessage(1));
-            } else if (!WEBGL.isWebGL2Available()) {
+            if (!WEBGL.isWebGL2Available()) {
                 viewerDiv.appendChild(WEBGL.getErrorMessage(2));
             }
-
-            throw new Error('WebGL unsupported');
-        }
-
-        if (!renderer && options.logarithmicDepthBuffer) {
-            // We don't support logarithmicDepthBuffer when EXT_frag_depth is missing.
-            // So recreated a renderer if needed.
-            if (!this.renderer.capabilities.isWebGL2 && !this.renderer.extensions.get('EXT_frag_depth')) {
-                this.renderer.dispose();
-                this.renderer = new (options.isWebGL2 ? THREE.WebGLRenderer : THREE.WebGL1Renderer)({
-                    canvas: document.createElement('canvas'),
-                    antialias: options.antialias,
-                    alpha: options.alpha,
-                    logarithmicDepthBuffer: false,
-                });
-            }
+            throw ex;
         }
 
         // Let's allow our canvas to take focus
@@ -133,7 +126,7 @@ class c3DEngine {
 
     /**
      * return renderer THREE.js
-     * @returns {undefined|THREE.WebGLRenderer}
+     * @returns {THREE.WebGLRenderer}
      */
     getRenderer() {
         return this.renderer;
@@ -208,40 +201,25 @@ class c3DEngine {
     }
 
     bufferToImage(pixelBuffer, width, height) {
-        var canvas = document.createElement('canvas');
-        var ctx = canvas.getContext('2d');
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
         // size the canvas to your desired image
         canvas.width = width;
         canvas.height = height;
 
-        var imgData = ctx.getImageData(0, 0, width, height);
+        const imgData = ctx.getImageData(0, 0, width, height);
         imgData.data.set(pixelBuffer);
 
         ctx.putImageData(imgData, 0, 0);
 
         // create a new img object
-        var image = new Image();
+        const image = new Image();
 
         // set the img.src to the canvas data url
         image.src = canvas.toDataURL();
 
         return image;
-    }
-
-    getUniqueThreejsLayer() {
-        // We use three.js Object3D.layers feature to manage visibility of
-        // geometry layers; so we need an internal counter to assign a new
-        // one to each new geometry layer.
-        // Warning: only 32 ([0, 31]) different layers can exist.
-        if (this._nextThreejsLayer > 31) {
-            console.warn('Too much three.js layers. Starting from now all of them will use layerMask = 31');
-            this._nextThreejsLayer = 31;
-        }
-
-        const result = this._nextThreejsLayer++;
-
-        return result;
     }
 
     depthBufferRGBAValueToOrthoZ(depthBufferRGBA, camera) {

@@ -68,13 +68,8 @@ function onKeyDown(e) {
 }
 
 function onDocumentMouseWheel(event) {
-    let delta = 0;
-    if (event.wheelDelta !== undefined) {
-        delta = event.wheelDelta;
-    // Firefox
-    } else if (event.detail !== undefined) {
-        delta = -event.detail;
-    }
+    const delta = -event.deltaY;
+
     if (delta < 0) {
         this.moves.add(MOVEMENTS.wheelup);
     } else {
@@ -95,7 +90,6 @@ function onDocumentMouseWheel(event) {
  */
 class FlyControls extends THREE.EventDispatcher {
     /**
-     * @Constructor
      * @param {View} view
      * @param {object} options
      * @param {boolean} options.focusOnClick - whether or not to focus the renderer domElement on click
@@ -105,7 +99,7 @@ class FlyControls extends THREE.EventDispatcher {
         super();
         this.view = view;
         this.options = options;
-        this._camera3D = view.camera.camera3D;
+        this._camera3D = view.camera3D;
         this.moves = new Set();
         this.moveSpeed = 10; // backward or forward move speed in m/s
 
@@ -121,8 +115,7 @@ class FlyControls extends THREE.EventDispatcher {
         view.domElement.addEventListener('touchmove', bindedPM, false);
         view.domElement.addEventListener('mouseup', onDocumentMouseUp.bind(this), false);
         view.domElement.addEventListener('touchend', onDocumentMouseUp.bind(this), false);
-        view.domElement.addEventListener('mousewheel', onDocumentMouseWheel.bind(this), false);
-        view.domElement.addEventListener('DOMMouseScroll', onDocumentMouseWheel.bind(this), false); // firefox
+        view.domElement.addEventListener('wheel', onDocumentMouseWheel.bind(this), false);
         view.domElement.addEventListener('keyup', onKeyUp.bind(this), true);
         view.domElement.addEventListener('keydown', onKeyDown.bind(this), true);
 

@@ -5,7 +5,7 @@ function pointIsOverLine(point, linePoints, epsilon, offset, count, size) {
     const x0 = point.x;
     const y0 = point.y;
     // for each segment of the line (j is i -1)
-    for (var i = offset + size, j = offset; i < offset + count; j = i, i += size) {
+    for (let i = offset + size, j = offset; i < offset + count; j = i, i += size) {
         /* **********************************************************
             norm     : norm of vector P1P2
             distance : distance point P0 to line P1P2
@@ -54,7 +54,7 @@ function getClosestPoint(point, points, epsilon, offset, count, size) {
     const y0 = point.y;
     let squaredEpsilon = epsilon * epsilon;
     let closestPoint;
-    for (var i = offset; i < offset + count; i += size) {
+    for (let i = offset; i < offset + count; i += size) {
         const x1 = points[i];
         const y1 = points[i + 1];
         const xP = x0 - x1;
@@ -68,7 +68,7 @@ function getClosestPoint(point, points, epsilon, offset, count, size) {
     return closestPoint;
 }
 
-function pointIsInsidePolygon(point, polygonPoints, offset, count, size) {
+function pointIsInsidePolygon(point, polygonPoints, epsilon, offset, count, size) {
     // ray-casting algorithm based on
     // http://wrf.ecse.rpi.edu/Homepages/wrf/Research/Short_Notes/pnpoly.html
 
@@ -78,12 +78,13 @@ function pointIsInsidePolygon(point, polygonPoints, offset, count, size) {
     let inside = false;
     // in first j is last point of polygon
     // for each segment of the polygon (j is i -1)
-    // debugger;
     for (let i = offset, j = offset + count - size; i < offset + count; j = i, i += size) {
         const xi = polygonPoints[i];
         const yi = polygonPoints[i + 1];
         const xj = polygonPoints[j];
         const yj = polygonPoints[j + 1];
+
+        if (pointIsOverLine(point, [xi, yi, xj, yj], epsilon, 0, 4, 2)) { return true; }
 
         // isIntersect semi-infinite ray horizontally with polygon's edge
         const isIntersect = ((yi > y) != (yj > y))
@@ -99,7 +100,7 @@ function pointIsInsidePolygon(point, polygonPoints, offset, count, size) {
 function isFeatureSingleGeometryUnderCoordinate(coordinate, type, coordinates, epsilon, offset, count, size) {
     if ((type == FEATURE_TYPES.LINE) && pointIsOverLine(coordinate, coordinates, epsilon, offset, count, size)) {
         return true;
-    } else if ((type == FEATURE_TYPES.POLYGON) && pointIsInsidePolygon(coordinate, coordinates, offset, count, size)) {
+    } else if ((type == FEATURE_TYPES.POLYGON) && pointIsInsidePolygon(coordinate, coordinates, epsilon, offset, count, size)) {
         return true;
     } else if (type == FEATURE_TYPES.POINT) {
         const closestPoint = getClosestPoint(coordinate, coordinates, epsilon, offset, count, size);

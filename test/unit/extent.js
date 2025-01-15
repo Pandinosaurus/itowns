@@ -1,17 +1,16 @@
 import assert from 'assert';
-import { Box3, Vector3, Matrix4, Quaternion } from 'three';
+import { Box3, Vector3, Vector2, Matrix4, Quaternion } from 'three';
 import Coordinates from 'Core/Geographic/Coordinates';
 import Extent from 'Core/Geographic/Extent';
-import CRS from 'Core/Geographic/Crs';
+import proj4 from 'proj4';
+
+proj4.defs('EPSG:2154', '+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 describe('Extent', function () {
     const minX = 0;
     const maxX = 10;
     const minY = -1;
     const maxY = 3;
-    const zoom = 5;
-    const row = 22;
-    const col = 10;
 
     it('should build the expected extent using Coordinates', function () {
         const withCoords = new Extent('EPSG:4326',
@@ -60,7 +59,7 @@ describe('Extent', function () {
         const box = new Box3(
             new Vector3(Math.random(), Math.random()),
             new Vector3(Math.random(), Math.random()));
-        const fromBox = Extent.fromBox3('EPSG:4978', box);
+        const fromBox = Extent.fromBox3('EPSG:4326', box);
 
         assert.equal(fromBox.west, box.min.x);
         assert.equal(fromBox.east, box.max.x);
@@ -95,14 +94,40 @@ describe('Extent', function () {
         assert.strictEqual(subdivided[3].north, 0);
     });
 
-    it('should return the correct dimension of the extent', function () {
+    it('should return the correct planar dimensions', function () {
         const extent = new Extent('EPSG:4326', -15, 10, -10, 10);
-        const dimensions = extent.dimensions();
+        const dimensions = extent.planarDimensions();
 
         // Width
         assert.equal(dimensions.x, 25);
         // Height
         assert.equal(dimensions.y, 20);
+    });
+
+    it('should return the same planar dimensions with deprecated dimensions method', function () {
+        const extent = new Extent('EPSG:4326', -15, 10, -10, 10);
+        const dimensions = extent.planarDimensions();
+        const dimensions_2 = extent.dimensions();
+        assert.equal(dimensions.x, dimensions_2.x);
+        assert.equal(dimensions.y, dimensions_2.y);
+    });
+
+    it('should return the correct earth euclidean dimensions', function () {
+        const extent = new Extent('EPSG:4326', 3, 3.01, 46, 46.01);
+        const dimensions = new Vector2();
+
+        extent.spatialEuclideanDimensions(dimensions);
+        assert.equal(dimensions.x, 774.4934293643765);
+        assert.equal(dimensions.y, 1111.5141604285038);
+    });
+
+    it('should return the correct geodesic dimensions', function () {
+        const extent = new Extent('EPSG:4326', 3, 3.01, 46, 46.01);
+        const dimensions = new Vector2();
+
+        extent.geodeticDimensions(dimensions);
+        assert.equal(dimensions.x, 773.2375602074535);
+        assert.equal(dimensions.y, 1113.3197697640906);
     });
 
     it('should clone extent like expected', function () {
@@ -112,44 +137,6 @@ describe('Extent', function () {
         assert.equal(clonedExtent.east, withValues.east);
         assert.equal(clonedExtent.south, withValues.south);
         assert.equal(clonedExtent.north, withValues.north);
-    });
-
-    it('should clone tiled extent like expected', function () {
-        const withValues = new Extent('TMS:4326', zoom, row, col);
-        const clonedExtent = withValues.clone();
-        assert.equal(clonedExtent.zoom, withValues.zoom);
-        assert.equal(clonedExtent.row, withValues.row);
-        assert.equal(clonedExtent.col, withValues.col);
-    });
-
-    it('should isTms return true if extent is tiled extent', function () {
-        const withValues = new Extent('TMS:4326', zoom, row, col);
-        assert.ok(CRS.isTms(withValues.crs));
-    });
-
-    it('should convert extent TMS:4326 like expected', function () {
-        const withValues = new Extent('TMS:4326', 0, 0, 0).as('EPSG:4326');
-        assert.equal(-180, withValues.west);
-        assert.equal(0, withValues.east);
-        assert.equal(-90, withValues.south);
-        assert.equal(90, withValues.north);
-    });
-
-    it('should convert extent TMS:3857 to EPSG:3857 like expected', function () {
-        const withValues = new Extent('TMS:3857', 0, 0, 0).as('EPSG:3857');
-        assert.equal(-20037508.342789244, withValues.west);
-        assert.equal(20037508.342789244, withValues.east);
-        assert.equal(-20037508.342789244, withValues.south);
-        assert.equal(20037508.342789244, withValues.north);
-    });
-
-    it('should convert extent TMS:3857 to EPSG:4326 like expected', function () {
-        const withValues = new Extent('TMS:3857', 0, 0, 0);
-        const result = withValues.as('EPSG:4326');
-        assert.equal(-180.00000000000003, result.west);
-        assert.equal(180.00000000000003, result.east);
-        assert.equal(-85.0511287798066, result.south);
-        assert.equal(85.0511287798066, result.north);
     });
 
     it('should convert extent EPSG:4326 like expected', function () {
@@ -168,7 +155,7 @@ describe('Extent', function () {
     });
     it('should return dimensions of extent expected', function () {
         const withValues = new Extent('EPSG:4326', [minX, maxX, minY, maxY]);
-        const dimensions = withValues.dimensions();
+        const dimensions = withValues.planarDimensions();
         assert.equal(10, dimensions.x);
         assert.equal(4, dimensions.y);
     });
@@ -193,24 +180,6 @@ describe('Extent', function () {
         assert.equal(offset.y, -0.5);
         assert.equal(offset.z, 1.25);
         assert.equal(offset.w, 2);
-    });
-
-    it('should return expected offset using tiled extent', function () {
-        const withValues = new Extent('TMS:4326', zoom, row, col);
-        const parent = new Extent('TMS:4326', zoom - 2, row, col);
-        const offset = withValues.offsetToParent(parent);
-        assert.equal(offset.x, 0.5);
-        assert.equal(offset.y, 0.5);
-        assert.equal(offset.z, 0.25);
-        assert.equal(offset.w, 0.25);
-    });
-
-    it('should return expected tiled extent parent', function () {
-        const withValues = new Extent('TMS:4326', zoom, row, col);
-        const parent = withValues.tiledExtentParent(zoom - 2);
-        assert.equal(parent.zoom, 3);
-        assert.equal(parent.row, 5);
-        assert.equal(parent.col, 2);
     });
 
     it('should return true if intersect other extent', function () {
@@ -278,15 +247,6 @@ describe('Extent', function () {
         assert.equal(toValues[3], withValues.south);
     });
 
-    it('should convert TMS extent values to string', function () {
-        const withValues = new Extent('TMS:4326', 0, 1, 2);
-        const tostring = withValues.toString(',');
-        const toValues = tostring.split(',').map(s => Number(s));
-        assert.equal(toValues[0], withValues.zoom);
-        assert.equal(toValues[1], withValues.row);
-        assert.equal(toValues[2], withValues.col);
-    });
-
     it('should copy and transform extent', function () {
         const withValues = new Extent('EPSG:4326', [0, 0, 0, 0]);
         const extent = new Extent('EPSG:4326', [minX + 1, maxX - 1, maxY - 1, maxY + 2]);
@@ -314,5 +274,9 @@ describe('Extent', function () {
         assert.equal(0, center.x);
         assert.equal(90, center.y);
         assert.equal(0, center.z);
+    });
+
+    it('should throw error when instance with geocentric projection', () => {
+        assert.throws(() => new Extent('EPSG:4978'));
     });
 });

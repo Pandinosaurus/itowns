@@ -90,6 +90,7 @@ const plane = new THREE.Plane(
 
 // default parameters :
 const defaultOptions = {
+    enabled: true,
     enableRotation: true,
     rotateSpeed: 2.0,
     minPanSpeed: 0.05,
@@ -108,8 +109,6 @@ const defaultOptions = {
     instantTravel: false,
     minZenithAngle: 0,
     maxZenithAngle: 82.5,
-    focusOnMouseOver: true,
-    focusOnMouseClick: true,
     handleCollision: true,
     minDistanceCollision: 30,
     enableSmartTravel: true,
@@ -136,6 +135,7 @@ export const PLANAR_CONTROL_EVENT = {
  * @class   PlanarControls
  * @param   {PlanarView}    view                                the view where the controls will be used
  * @param   {object}        options
+ * @param   {boolean}       [options.enabled=true]              Set to false to disable this control
  * @param   {boolean}       [options.enableRotation=true]       Enable the rotation with the `CTRL + Left mouse button`
  * and in animations, like the smart zoom.
  * @param   {boolean}       [options.enableSmartTravel=true]    Enable smart travel with the `wheel-click / space-bar`.
@@ -167,15 +167,16 @@ export const PLANAR_CONTROL_EVENT = {
  * rotation, in degrees.
  * @param   {number}        [options.maxZenithAngle=82.5]       The maximum reachable zenith angle for a camera
  * rotation, in degrees.
- * @param   {boolean}       [options.focusOnMouseOver=true]     Set the focus on the canvas if hovered.
- * @param   {boolean}       [options.focusOnMouseClick=true]    Set the focus on the canvas if clicked.
  * @param   {boolean}       [options.handleCollision=true]
  */
 class PlanarControls extends THREE.EventDispatcher {
     constructor(view, options = {}) {
         super();
         this.view = view;
-        this.camera = view.camera.camera3D;
+        this.camera = view.camera3D;
+
+        // Set to false to disable this control
+        this.enabled = typeof options.enabled == 'boolean' ? options.enabled : defaultOptions.enabled;
 
         if (this.camera.isOrthographicCamera) {
             cameraInitialZoom = this.camera.zoom;
@@ -266,8 +267,12 @@ class PlanarControls extends THREE.EventDispatcher {
         this.maxZenithAngle = (options.maxZenithAngle || defaultOptions.maxZenithAngle) * Math.PI / 180;
 
         // focus policy options
-        this.focusOnMouseOver = options.focusOnMouseOver || defaultOptions.focusOnMouseOver;
-        this.focusOnMouseClick = options.focusOnMouseClick || defaultOptions.focusOnMouseClick;
+        if (options.focusOnMouseOver) {
+            console.warn('Planar controls \'focusOnMouseOver\' optional parameter has been removed.');
+        }
+        if (options.focusOnMouseClick) {
+            console.warn('Planar controls \'focusOnMouseClick\' optional parameter has been removed.');
+        }
 
         // set collision options
         this.handleCollision = options.handleCollision === undefined ?
@@ -297,8 +302,6 @@ class PlanarControls extends THREE.EventDispatcher {
         this._handlerOnMouseUp = this.onMouseUp.bind(this);
         this._handlerOnMouseMove = this.onMouseMove.bind(this);
         this._handlerOnMouseWheel = this.onMouseWheel.bind(this);
-        this._handlerFocusOnMouseClick = this.onMouseClick.bind(this);
-        this._handlerFocusOnMouseOver = this.onMouseOver.bind(this);
         this._handlerContextMenu = this.onContextMenu.bind(this);
         this._handlerUpdate = this.update.bind(this);
 
@@ -510,14 +513,7 @@ class PlanarControls extends THREE.EventDispatcher {
      * @ignore
      */
     initiateZoom(event) {
-        let delta;
-
-        // mousewheel delta
-        if (undefined !== event.wheelDelta) {
-            delta = event.wheelDelta;
-        } else if (undefined !== event.detail) {
-            delta = -event.detail;
-        }
+        const delta = -event.deltaY;
 
         pointUnderCursor.copy(this.getWorldPointAtScreenXY(mousePosition));
         const newPos = new THREE.Vector3();
@@ -900,19 +896,10 @@ class PlanarControls extends THREE.EventDispatcher {
         this.view.domElement.addEventListener('mouseup', this._handlerOnMouseUp, false);
         this.view.domElement.addEventListener('mouseleave', this._handlerOnMouseUp, false);
         this.view.domElement.addEventListener('mousemove', this._handlerOnMouseMove, false);
-        this.view.domElement.addEventListener('mousewheel', this._handlerOnMouseWheel, false);
-        // focus policy
-        if (this.focusOnMouseOver) {
-            this.view.domElement.addEventListener('mouseover', this._handlerFocusOnMouseOver, false);
-        }
-        if (this.focusOnMouseClick) {
-            this.view.domElement.addEventListener('click', this._handlerFocusOnMouseClick, false);
-        }
+        this.view.domElement.addEventListener('wheel', this._handlerOnMouseWheel, false);
         // prevent the default context menu from appearing when right-clicking
         // this allows to use right-click for input without the menu appearing
         this.view.domElement.addEventListener('contextmenu', this._handlerContextMenu, false);
-        // for firefox
-        this.view.domElement.addEventListener('MozMousePixelScroll', this._handlerOnMouseWheel, false);
     }
 
     /**
@@ -926,12 +913,8 @@ class PlanarControls extends THREE.EventDispatcher {
         this.view.domElement.removeEventListener('mouseup', this._handlerOnMouseUp, false);
         this.view.domElement.removeEventListener('mouseleave', this._handlerOnMouseUp, false);
         this.view.domElement.removeEventListener('mousemove', this._handlerOnMouseMove, false);
-        this.view.domElement.removeEventListener('mousewheel', this._handlerOnMouseWheel, false);
-        this.view.domElement.removeEventListener('mouseover', this._handlerFocusOnMouseOver, false);
-        this.view.domElement.removeEventListener('click', this._handlerFocusOnMouseClick, false);
+        this.view.domElement.removeEventListener('wheel', this._handlerOnMouseWheel, false);
         this.view.domElement.removeEventListener('contextmenu', this._handlerContextMenu, false);
-        // for firefox
-        this.view.domElement.removeEventListener('MozMousePixelScroll', this._handlerOnMouseWheel, false);
     }
 
     /**
@@ -991,7 +974,13 @@ class PlanarControls extends THREE.EventDispatcher {
      * @ignore
      */
     onMouseDown(event) {
+        if (!this.enabled) {
+            return;
+        }
+
         event.preventDefault();
+
+        this.view.domElement.focus();
 
         if (STATE.NONE !== this.state) {
             return;
@@ -1056,6 +1045,10 @@ class PlanarControls extends THREE.EventDispatcher {
      * @ignore
      */
     onMouseMove(event) {
+        if (!this.enabled) {
+            return;
+        }
+
         event.preventDefault();
 
         this.updateMousePositionAndDelta(event);
@@ -1073,7 +1066,7 @@ class PlanarControls extends THREE.EventDispatcher {
      * @ignore
      */
     onKeyDown(event) {
-        if (STATE.NONE !== this.state) {
+        if (STATE.NONE !== this.state || !this.enabled) {
             return;
         }
         switch (event.keyCode) {
@@ -1103,30 +1096,16 @@ class PlanarControls extends THREE.EventDispatcher {
      * @ignore
      */
     onMouseWheel(event) {
+        if (!this.enabled) {
+            return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
 
         if (STATE.NONE === this.state) {
             this.initiateZoom(event);
         }
-    }
-
-    /**
-     * Set the focus on view's domElement according to focus policy regarding MouseOver
-     *
-     * @ignore
-     */
-    onMouseOver() {
-        this.view.domElement.focus();
-    }
-
-    /**
-     * Set the focus on view's domElement according to focus policy regarding MouseClick
-     *
-     * @ignore
-     */
-    onMouseClick() {
-        this.view.domElement.focus();
     }
 
     /**

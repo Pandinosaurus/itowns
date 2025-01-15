@@ -7,6 +7,8 @@ import { RasterElevationTile } from 'Renderer/RasterTile';
  * an ElevationLayer. Default is true. You should not change this, as it is used
  * internally for optimisation.
  * @property {number} noDataValue - Used to specify a **null** or **no data value** in the elevation terrain.
+ * @property {number} [zmin] - Used to specify a minimum value for the elevation terrain (if the data goes lower, it will be clamped).
+ * @property {number} [zmax] - Used to specify a maximum value for the elevation terrain (if the data goes higher, it will be clamped)
  * @property {number} scale - Used to apply a scale on the elevation value. It
  * can be used for exageration of the elevation, like in [this
  * example](https://www.itowns-project.org/itowns/examples/#plugins_pyramidal_tiff).
@@ -20,14 +22,13 @@ import { RasterElevationTile } from 'Renderer/RasterTile';
  * ```
  * @property {number} colorTextureElevationMinZ - elevation minimum in `useColorTextureElevation` mode.
  * @property {number} colorTextureElevationMaxZ - elevation maximum in `useColorTextureElevation` mode.
+ *
+ * @extends RasterLayer
  */
 class ElevationLayer extends RasterLayer {
     /**
      * A simple layer, managing an elevation texture to add some reliefs on the
      * plane or globe view for example.
-     *
-     * @constructor
-     * @extends Layer
      *
      * @param {string} id - The id of the layer, that should be unique. It is
      * not mandatory, but an error will be emitted if this layer is added a
@@ -37,12 +38,17 @@ class ElevationLayer extends RasterLayer {
      * contains three elements `name, protocol, extent`, these elements will be
      * available using `layer.name` or something else depending on the property
      * name.
+     * @param {number} [config.noDataValue]   The value coding the noData in the data set
+     * @param {Object} [config.clampValues] - Optional information for clamping
+     * the elevation between a minimum and a maximum value
+     * @param {number} [config.clampValues.min]   The minimum value to clamp the elevation
+     * @param {number} [config.clampValues.max]   The maximum value to clamp the elevation
      *
      * @example
      * // Create an ElevationLayer
      * const elevation = new ElevationLayer('IGN_MNT', {
      *      source: new WMTSSource({
-     *          "url": "https://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wmts",
+     *          "url": "https://data.geopf.fr/wmts?",
      *           "crs": "EPSG:4326",
      *           "format": "image/x-bil;bits=32",
      *           "name": "ELEVATION.ELEVATIONGRIDCOVERAGE",
@@ -53,23 +59,52 @@ class ElevationLayer extends RasterLayer {
      * view.addLayer(elevation);
      */
     constructor(id, config = {}) {
-        super(id, config);
+        const {
+            scale = 1.0,
+            noDataValue,
+            clampValues,
+            useRgbaTextureElevation,
+            useColorTextureElevation,
+            colorTextureElevationMinZ,
+            colorTextureElevationMaxZ,
+            bias,
+            mode,
+            ...rasterConfig
+        } = config;
+
+        super(id, rasterConfig);
+
+        /**
+         * @type {boolean}
+         * @readonly
+         */
         this.isElevationLayer = true;
 
-        // This is used to add a factor needed to color texture
-        let baseScale = 1.0;
-        if (this.useColorTextureElevation) {
-            baseScale = this.colorTextureElevationMaxZ - this.colorTextureElevationMinZ;
+        this.noDataValue = noDataValue;
+
+        if (config.zmin || config.zmax) {
+            console.warn('Config using zmin and zmax are deprecated, use {clampValues: {min, max}} structure.');
         }
 
-        this.defineLayerProperty('scale', this.scale || 1.0, (self) => {
-            self.parent.object3d.traverse((obj) => {
-                if (obj.layer == self.parent && obj.material) {
-                    obj.material.setElevationScale(self.scale * baseScale);
-                    obj.obb.updateScaleZ(self.scale);
-                }
-            });
-        });
+        /**
+         * @type {number | undefined}
+         */
+        this.zmin = clampValues?.min ?? config.zmin;
+
+        /**
+         * @type {number | undefined}
+         */
+        this.zmax = clampValues?.max ?? config.zmax;
+
+        this.defineLayerProperty('scale', scale);
+
+        this.useRgbaTextureElevation = useRgbaTextureElevation;
+        this.useColorTextureElevation = useColorTextureElevation;
+        this.colorTextureElevationMinZ = colorTextureElevationMinZ;
+        this.colorTextureElevationMaxZ = colorTextureElevationMaxZ;
+
+        this.bias = bias;
+        this.mode = mode;
     }
 
     /**
@@ -85,11 +120,20 @@ class ElevationLayer extends RasterLayer {
         node.material.addLayer(rasterElevationNode);
         node.material.setSequenceElevation(this.id);
         // bounding box initialisation
-        const updateBBox = () => node.setBBoxZ(rasterElevationNode.min, rasterElevationNode.max, this.scale);
+        const updateBBox = () => node.setBBoxZ({
+            min: rasterElevationNode.min, max: rasterElevationNode.max, scale: this.scale,
+        });
         updateBBox();
 
         // listen elevation updating
-        rasterElevationNode.addEventListener('updatedElevation', updateBBox);
+        rasterElevationNode.addEventListener('rasterElevationLevelChanged', updateBBox);
+
+        // listen scaling elevation updating
+        this.addEventListener('scale-property-changed', updateBBox);
+        // remove scaling elevation updating if node is removed
+        node.addEventListener('dispose', () => {
+            this.removeEventListener('scale-property-changed', updateBBox);
+        });
 
         return rasterElevationNode;
     }

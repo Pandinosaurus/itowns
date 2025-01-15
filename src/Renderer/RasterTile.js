@@ -1,15 +1,23 @@
 import * as THREE from 'three';
 import { ELEVATION_MODES } from 'Renderer/LayeredMaterial';
 import { checkNodeElevationTextureValidity, insertSignificantValuesFromParent, computeMinMaxElevation } from 'Parser/XbilParser';
-import CRS from 'Core/Geographic/Crs';
 
 export const EMPTY_TEXTURE_ZOOM = -1;
 
 const pitch = new THREE.Vector4();
 
+function getIndiceWithPitch(i, pitch, w) {
+    // Return corresponding indice in parent tile using pitch
+    const currentX = (i % w) / w;  // normalized
+    const currentY = Math.floor(i / w) / w; // normalized
+    const newX = pitch.x + currentX * pitch.z;
+    const newY = pitch.y + currentY * pitch.w;
+    const newIndice = Math.floor(newY * w) * w + Math.floor(newX * w);
+    return newIndice;
+}
 
 /**
- * A `RasterTile` is part of raster [`Layer`]{@link Layer} data.
+ * A `RasterTile` is part of raster {@link Layer} data.
  * This part is a spatial subdivision of the extent of a layer.
  * In the `RasterTile`, The data are converted on three.js textures.
  * This `RasterTile` textures are assigned to a `LayeredMaterial`.
@@ -23,7 +31,7 @@ class RasterTile extends THREE.EventDispatcher {
     constructor(material, layer) {
         super();
         this.layer = layer;
-        this.crs = layer.parent.tileMatrixSets.indexOf(CRS.formatToTms(layer.crs));
+        this.crs = layer.parent.tileMatrixSets.indexOf(layer.crs);
         if (this.crs == -1) {
             console.error('Unknown crs:', layer.crs);
         }
@@ -35,6 +43,7 @@ class RasterTile extends THREE.EventDispatcher {
 
         this._handlerCBEvent = () => { this.material.layersNeedUpdate = true; };
         layer.addEventListener('visible-property-changed', this._handlerCBEvent);
+        layer.addEventListener('opacity-property-changed', this._handlerCBEvent);
     }
 
     get id() {
@@ -69,9 +78,10 @@ class RasterTile extends THREE.EventDispatcher {
         }
     }
 
-    dispose(removeEvent) {
+    dispose(removeEvent = true) {
         if (removeEvent) {
             this.layer.removeEventListener('visible-property-changed', this._handlerCBEvent);
+            this.layer.removeEventListener('opacity-property-changed', this._handlerCBEvent);
             // dispose all events
             this._listeners = {};
         }
@@ -88,7 +98,7 @@ class RasterTile extends THREE.EventDispatcher {
     }
 
     setTexture(index, texture, offsetScale) {
-        this.level = (texture && (index == 0)) ? texture.extent.zoom : this.level;
+        this.level = (texture && texture.extent && (index == 0)) ? texture.extent.zoom : this.level;
         this.textures[index] = texture || null;
         this.offsetScales[index] = offsetScale;
         this.material.layersNeedUpdate = true;
@@ -111,6 +121,9 @@ export class RasterColorTile extends RasterTile {
     get effect_parameter() {
         return this.layer.effect_parameter;
     }
+    get transparent() {
+        return this.layer.transparent;
+    }
 }
 
 export class RasterElevationTile extends RasterTile {
@@ -118,13 +131,12 @@ export class RasterElevationTile extends RasterTile {
         super(material, layer);
         const defaultEle = {
             bias: 0,
-            scale: 1,
             mode: ELEVATION_MODES.DATA,
-            zmin: 0,
+            zmin: -Infinity,
             zmax: Infinity,
         };
 
-        let scaleFactor = 1.0;
+        this.scaleFactor = 1.0;
 
         // Define elevation properties
         if (layer.useRgbaTextureElevation) {
@@ -132,7 +144,7 @@ export class RasterElevationTile extends RasterTile {
             defaultEle.zmax = 5000;
             throw new Error('Restore this feature');
         } else if (layer.useColorTextureElevation) {
-            scaleFactor = layer.colorTextureElevationMaxZ - layer.colorTextureElevationMinZ;
+            this.scaleFactor = layer.colorTextureElevationMaxZ - layer.colorTextureElevationMinZ;
             defaultEle.mode = ELEVATION_MODES.COLOR;
             defaultEle.bias = layer.colorTextureElevationMinZ;
             this.min = this.layer.colorTextureElevationMinZ;
@@ -141,32 +153,57 @@ export class RasterElevationTile extends RasterTile {
             this.min = 0;
             this.max = 0;
         }
+        this.bias = layer.bias ?? defaultEle.bias;
+        this.mode = layer.mode ?? defaultEle.mode;
+        this.zmin = layer.zmin ?? defaultEle.zmin;
+        this.zmax = layer.zmax ?? defaultEle.zmax;
 
-        this.bias = layer.bias || defaultEle.bias;
-        this.scale = (layer.scale || defaultEle.scale) * scaleFactor;
-        this.mode = layer.mode || defaultEle.mode;
-        this.zmin = layer.zmin || defaultEle.zmin;
-        this.zmax = layer.zmax || defaultEle.zmax;
+        layer.addEventListener('scale-property-changed', this._handlerCBEvent);
+    }
+
+    get scale() {
+        return this.layer.scale * this.scaleFactor;
+    }
+
+    dispose(removeEvent) {
+        super.dispose(removeEvent);
+        if (removeEvent) {
+            this.layer.removeEventListener('scale-property-changed', this._handlerCBEvent);
+        }
     }
 
     initFromParent(parent, extents) {
+        const currentLevel = this.level;
         super.initFromParent(parent, extents);
         this.updateMinMaxElevation();
+        if (currentLevel !== this.level) {
+            this.dispatchEvent({ type: 'rasterElevationLevelChanged', node: this });
+        }
     }
 
     setTextures(textures, offsetScales) {
+        const currentLevel = this.level;
         this.replaceNoDataValueFromTexture(textures[0]);
         super.setTextures(textures, offsetScales);
         this.updateMinMaxElevation();
+        if (currentLevel !== this.level) {
+            this.dispatchEvent({ type: 'rasterElevationLevelChanged', node: this });
+        }
     }
 
     updateMinMaxElevation() {
         if (this.textures[0] && !this.layer.useColorTextureElevation) {
-            const { min, max } = computeMinMaxElevation(this.textures[0], this.offsetScales[0], this.layer.noDataValue);
+            const { min, max } = computeMinMaxElevation(
+                this.textures[0],
+                this.offsetScales[0],
+                {
+                    noDataValue: this.layer.noDataValue,
+                    zmin: this.layer.zmin,
+                    zmax: this.layer.zmax,
+                });
             if (this.min != min || this.max != max) {
                 this.min = min;
                 this.max = max;
-                this.dispatchEvent({ type: 'updatedElevation', node: this });
             }
         }
     }
@@ -176,13 +213,18 @@ export class RasterElevationTile extends RasterTile {
         if (nodatavalue == undefined) {
             return;
         }
-        // replace no datat value with parent texture value.
+        // replace no data value with parent texture value or 0 (if no significant value found).
         const parentTexture = this.textures[0];
         const parentDataElevation = parentTexture && parentTexture.image && parentTexture.image.data;
         const dataElevation = texture.image && texture.image.data;
-        if (dataElevation && parentDataElevation && !checkNodeElevationTextureValidity(dataElevation, nodatavalue)) {
-            texture.extent.offsetToParent(parentTexture.extent, pitch);
-            insertSignificantValuesFromParent(dataElevation, parentDataElevation, nodatavalue, pitch);
+
+        if (dataElevation && !checkNodeElevationTextureValidity(dataElevation, nodatavalue)) {
+            insertSignificantValuesFromParent(dataElevation, parentDataElevation && dataParent(texture, parentTexture, parentDataElevation, pitch), nodatavalue);
         }
     }
+}
+
+function dataParent(texture, parentTexture, parentDataElevation, pitch) {
+    texture.extent.offsetToParent(parentTexture.extent, pitch);
+    return i => parentDataElevation[getIndiceWithPitch(i, pitch, 256)];
 }

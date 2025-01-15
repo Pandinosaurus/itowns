@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import CRS from 'Core/Geographic/Crs';
+import { geoidLayerIsVisible } from 'Layer/GeoidLayer';
+import { tiledCovering } from 'Core/Tile/Tile';
 
 /**
  * A TileMesh is a THREE.Mesh with a geometricError and an OBB
  * The objectId property of the material is the with the id of the TileMesh
- * @constructor
  * @param {TileGeometry} geometry - the tile geometry
  * @param {THREE.Material} material - a THREE.Material compatible with THREE.Mesh
  * @param {Layer} layer - the layer the tile is added to
@@ -12,6 +12,8 @@ import CRS from 'Core/Geographic/Crs';
  * @param {?number} level - the tile level (default = 0)
  */
 class TileMesh extends THREE.Mesh {
+    #_tms = new Map();
+    #visible = true;
     constructor(geometry, material, layer, extent, level = 0) {
         super(geometry, material);
 
@@ -29,10 +31,9 @@ class TileMesh extends THREE.Mesh {
         this.obb = this.geometry.OBB.clone();
         this.boundingSphere = new THREE.Sphere();
         this.obb.box3D.getBoundingSphere(this.boundingSphere);
-        this._tms = new Map();
 
         for (const tms of layer.tileMatrixSets) {
-            this._tms.set(tms, this.extent.tiledCovering(tms));
+            this.#_tms.set(tms, tiledCovering(this.extent, tms));
         }
 
         this.frustumCulled = false;
@@ -42,33 +43,40 @@ class TileMesh extends THREE.Mesh {
         this.layerUpdateState = {};
         this.isTileMesh = true;
 
-        this.domElements = {};
-    }
+        this.geoidHeight = 0;
 
+        this.link = {};
+
+        Object.defineProperty(this, 'visible', {
+            get() { return this.#visible; },
+            set(v) {
+                if (this.#visible != v) {
+                    this.#visible = v;
+                    this.dispatchEvent({ type: v ? 'shown' : 'hidden' });
+                }
+            },
+        });
+    }
     /**
      * If specified, update the min and max elevation of the OBB
      * and updates accordingly the bounding sphere and the geometric error
      *
-     * @param {?number} min
-     * @param {?number} max
-     * @param {?number} scale
+     * @param {Object}  elevation
+     * @param {number}  [elevation.min]
+     * @param {number}  [elevation.max]
+     * @param {number}  [elevation.scale]
      */
-    setBBoxZ(min, max, scale) {
-        if (min == null && max == null) {
-            return;
+    setBBoxZ(elevation) {
+        elevation.geoidHeight = geoidLayerIsVisible(this.layer) ? this.geoidHeight : 0;
+        this.obb.updateZ(elevation);
+        if (this.horizonCullingPointElevationScaled) {
+            this.horizonCullingPointElevationScaled.setLength(this.obb.z.delta + this.horizonCullingPoint.length());
         }
-        // FIXME: Why the floors ? This is not conservative : the obb may be too short by almost 1m !
-        if (Math.floor(min) !== Math.floor(this.obb.z.min) || Math.floor(max) !== Math.floor(this.obb.z.max)) {
-            this.obb.updateZ(min, max, scale);
-            if (this.horizonCullingPointElevationScaled) {
-                this.horizonCullingPointElevationScaled.setLength(this.obb.z.delta + this.horizonCullingPoint.length());
-            }
-            this.obb.box3D.getBoundingSphere(this.boundingSphere);
-        }
+        this.obb.box3D.getBoundingSphere(this.boundingSphere);
     }
 
     getExtentsByProjection(crs) {
-        return this._tms.get(CRS.formatToTms(crs));
+        return this.#_tms.get(crs);
     }
 
     /**
@@ -101,12 +109,6 @@ class TileMesh extends THREE.Mesh {
     onBeforeRender() {
         if (this.material.layersNeedUpdate) {
             this.material.updateLayersUniforms();
-        }
-    }
-
-    findClosestDomElement(id) {
-        if (this.parent.isTileMesh) {
-            return this.parent.domElements[id] || this.parent.findClosestDomElement(id);
         }
     }
 }

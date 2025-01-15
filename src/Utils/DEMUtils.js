@@ -147,7 +147,7 @@ function _readTextureValueAt(metadata, texture, ...uv) {
         _canvas.width = Math.max(_canvas.width, dw);
         _canvas.height = Math.max(_canvas.height, dh);
 
-        const ctx = _canvas.getContext('2d');
+        const ctx = _canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(texture.image, minx, miny, dw, dh, 0, 0, dw, dh);
         const d = ctx.getImageData(0, 0, dw, dh);
 
@@ -308,7 +308,7 @@ function offsetInExtent(point, extent, target = new THREE.Vector2()) {
         throw new Error(`Unsupported mix: ${point.crs} and ${extent.crs}`);
     }
 
-    extent.dimensions(dimension);
+    extent.planarDimensions(dimension);
 
     const originX = (point.x - extent.west) / dimension.x;
     const originY = (extent.north - point.y) / dimension.y;
@@ -321,7 +321,7 @@ function _readZ(layer, method, coord, nodes, cache) {
 
     let tileWithValidElevationTexture = null;
     // first check in cache
-    if (cache && cache.tile && cache.tile.material) {
+    if (cache?.tile?.material) {
         tileWithValidElevationTexture = tileAt(pt, cache.tile);
     }
     for (let i = 0; !tileWithValidElevationTexture && i < nodes.length; i++) {
@@ -364,7 +364,7 @@ function _readZ(layer, method, coord, nodes, cache) {
     //     at (offset.x, offset.y) and we're done
     //   - the correct one: emulate the vertex shader code
     if (method == PRECISE_READ_Z) {
-        pt.z = _readZCorrect(layer, src, temp.offset, tile.extent.dimensions(), tileWithValidElevationTexture.extent.dimensions());
+        pt.z = _readZCorrect(layer, src, temp.offset, tile.extent.planarDimensions(), tileWithValidElevationTexture.extent.planarDimensions());
     } else {
         pt.z = _readZFast(layer, src, temp.offset);
     }

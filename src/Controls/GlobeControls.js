@@ -4,9 +4,17 @@ import Coordinates from 'Core/Geographic/Coordinates';
 import { ellipsoidSizes } from 'Core/Math/Ellipsoid';
 import CameraUtils from 'Utils/CameraUtils';
 import StateControl from 'Controls/StateControl';
+import { VIEW_EVENTS } from 'Core/View';
 
 // private members
 const EPS = 0.000001;
+
+const direction = {
+    up: new THREE.Vector2(0, 1),
+    bottom: new THREE.Vector2(0, -1),
+    left: new THREE.Vector2(1, 0),
+    right: new THREE.Vector2(-1, 0),
+};
 
 // Orbit
 const rotateStart = new THREE.Vector2();
@@ -31,6 +39,7 @@ let dollyScale;
 // Globe move
 const moveAroundGlobe = new THREE.Quaternion();
 const cameraTarget = new THREE.Object3D();
+const coordCameraTarget = new Coordinates('EPSG:4978');
 cameraTarget.matrixWorldInverse = new THREE.Matrix4();
 
 const xyz = new Coordinates('EPSG:4978', 0, 0, 0);
@@ -76,9 +85,6 @@ if (enableTargetHelper) {
     helpers.picking = new THREE.AxesHelper(500000);
     helpers.target = new THREE.AxesHelper(500000);
 }
-
-// current downed key
-let currentKey;
 
 /**
  * Globe control pan event. Fires after camera pan
@@ -150,78 +156,106 @@ let previous;
  * @param      {GlobeView}  view the view where the control will be used
  * @param      {CameraTransformOptions|Extent} placement   the {@link CameraTransformOptions} to apply to view's camera
  * or the extent it must display at initialisation, see {@link CameraTransformOptions} in {@link CameraUtils}.
- * @param      {object}  options
- * @param      {number}  [options.zoomFactor=2] The factor the scale is multiplied by when dollying (zooming) in or
- * divided by when dollying out.
- * @param      {number}  options.rotateSpeed Speed camera rotation in orbit and panoramic mode
- * @param      {number}  options.minDistance Minimum distance between ground and camera
- * @param      {number}  options.maxDistance Maximum distance between ground and camera
- * @param      {bool}  options.handleCollision enable collision camera with ground
- * @property   {bool} enabled enable control
- * @property   {number} minDistance Minimum distance between ground and camera
- * @property   {number} maxDistance Maximum distance between ground and camera
- * @property   {number} zoomSpeed Speed zoom with mouse
- * @property   {number} rotateSpeed Speed camera rotation in orbit and panoramic mode
- * @property   {number} minDistanceCollision Minimum distance collision between ground and camera
- * @property   {bool} enableDamping enable camera damping, if it's disabled the camera immediately when the mouse button is released.
- * If it's enabled, the camera movement is decelerate.
+ * @param      {object}  [options] An object with one or more configuration properties. Any property of GlobeControls
+ * can be passed in this object.
+ * @property      {number}  zoomFactor The factor the scale is multiplied by when dollying (zooming) in or
+ * divided by when dollying out. Default is 1.1.
+ * @property      {number}  rotateSpeed Speed camera rotation in orbit and panoramic mode. Default is 0.25.
+ * @property      {number}  minDistance Minimum distance between ground and camera in meters (Perspective Camera only).
+ * Default is 250.
+ * @property      {number}  maxDistance Maximum distance between ground and camera in meters
+ * (Perspective Camera only). Default is ellipsoid radius * 8.
+ * @property      {number}  minZoom How far you can zoom in, in meters (Orthographic Camera only). Default is 0.
+ * @property      {number}  maxZoom How far you can zoom out, in meters (Orthographic Camera only). Default
+ * is Infinity.
+ * @property      {number}  keyPanSpeed Number of pixels moved per push on array key. Default is 7.
+ * @property      {number}  minPolarAngle Minimum vertical orbit angle (in degrees). Default is 0.5.
+ * @property      {number}  maxPolarAngle Maximum vertical orbit angle (in degrees). Default is 86.
+ * @property      {number}  minAzimuthAngle Minimum horizontal orbit angle (in degrees). If modified,
+ * should be in [-180,0]. Default is -Infinity.
+ * @property      {number}  maxAzimuthAngle Maximum horizontal orbit angle (in degrees). If modified,
+ * should be in [0,180]. Default is Infinity.
+ * @property      {boolean} handleCollision Handle collision between camera and ground or not, i.e. whether
+ * you can zoom underground or not. Default is true.
+ * @property      {boolean} enableDamping Enable damping or not (simulates the lag that a real camera
+ * operator introduces while operating a heavy physical camera). Default is true.
+ * @property      {boolean} dampingMoveFactor the damping move factor. Default is 0.25.
+ * @property      {StateControl~State} stateControl redefining which controls state is triggered by the keyboard/mouse
+ * event (For example, rewrite the PAN movement to be triggered with the 'left' mouseButton instead of 'right').
  */
 class GlobeControls extends THREE.EventDispatcher {
     constructor(view, placement, options = {}) {
         super();
         this.player = new AnimationPlayer();
         this.view = view;
-        this.camera = view.camera.camera3D;
+        this.camera = view.camera3D;
 
         // State control
-        this.states = new StateControl();
-        this.state = this.states.NONE;
+        this.states = new StateControl(this.view, options.stateControl);
 
-        // Set to false to disable this control
-        this.enabled = true;
+        // this.enabled property has moved to StateControl
+        Object.defineProperty(this, 'enabled', {
+            get: () => this.states.enabled,
+            set: (value) => {
+                console.warn(
+                    'GlobeControls.enabled property is deprecated. Use StateControl.enabled instead ' +
+                    '- which you can access with GlobeControls.states.enabled.',
+                );
+                this.states.enabled = value;
+            },
+        });
 
         // These options actually enables dollying in and out; left as "zoom" for
         // backwards compatibility
         if (options.zoomSpeed) {
-            console.warn('Controls zoomSpeed parameter is deprecated. Use zoomInFactor and zoomOutFactor instead.');
+            console.warn('Controls zoomSpeed parameter is deprecated. Use zoomFactor instead.');
             options.zoomFactor = options.zoomFactor || options.zoomSpeed;
         }
-        this.zoomFactor = options.zoomFactor || 1.25;
+        this.zoomFactor = options.zoomFactor || 1.1;
 
         // Limits to how far you can dolly in and out ( PerspectiveCamera only )
         this.minDistance = options.minDistance || 250;
         this.maxDistance = options.maxDistance || ellipsoidSizes.x * 8.0;
 
         // Limits to how far you can zoom in and out ( OrthographicCamera only )
-        this.minZoom = 0;
-        this.maxZoom = Infinity;
+        this.minZoom = options.minZoom || 0;
+        this.maxZoom = options.maxZoom || Infinity;
 
         // Set to true to disable this control
         this.rotateSpeed = options.rotateSpeed || 0.25;
 
         // Set to true to disable this control
-        this.keyPanSpeed = 7.0; // pixels moved per arrow key push
+        this.keyPanSpeed = options.keyPanSpeed || 7.0; // pixels moved per arrow key push
 
         // How far you can orbit vertically, upper and lower limits.
         // Range is 0 to Math.PI radians.
         // TODO Warning minPolarAngle = 0.01 -> it isn't possible to be perpendicular on Globe
-        this.minPolarAngle = THREE.MathUtils.degToRad(0.5); // radians
-        this.maxPolarAngle = THREE.MathUtils.degToRad(86); // radians
+        this.minPolarAngle = THREE.MathUtils.degToRad(options.minPolarAngle ?? 0.5);
+        this.maxPolarAngle = THREE.MathUtils.degToRad(options.minPolarAngle ?? 86);
 
         // How far you can orbit horizontally, upper and lower limits.
         // If set, must be a sub-interval of the interval [ - Math.PI, Math.PI ].
-        this.minAzimuthAngle = -Infinity; // radians
-        this.maxAzimuthAngle = Infinity; // radians
+        this.minAzimuthAngle = options.minAzimuthAngle ? THREE.MathUtils.degToRad(options.minAzimuthAngle) : -Infinity; // radians
+        this.maxAzimuthAngle = options.maxAzimuthAngle ? THREE.MathUtils.degToRad(options.maxAzimuthAngle) : Infinity; // radians
 
         // Set collision options
         this.handleCollision = typeof (options.handleCollision) !== 'undefined' ? options.handleCollision : true;
         this.minDistanceCollision = 60;
 
-        // Set to true to disable use of the keys
-        this.enableKeys = true;
+        // this.enableKeys property has moved to StateControl
+        Object.defineProperty(this, 'enableKeys', {
+            get: () => this.states.enableKeys,
+            set: (value) => {
+                console.warn(
+                    'GlobeControls.enableKeys property is deprecated. Use StateControl.enableKeys instead ' +
+                    '- which you can access with GlobeControls.states.enableKeys.',
+                );
+                this.states.enableKeys = value;
+            },
+        });
 
         // Enable Damping
-        this.enableDamping = true;
+        this.enableDamping = options.enableDamping !== false;
         this.dampingMoveFactor = options.dampingMoveFactor != undefined ? options.dampingMoveFactor : dampingFactorDefault;
 
         this.startEvent = {
@@ -234,49 +268,45 @@ class GlobeControls extends THREE.EventDispatcher {
         this.updateHelper = enableTargetHelper ? (position, helper) => {
             positionObject(position, helper);
             view.notifyChange(this.camera);
-        } : function empty() {};
+        } : function empty() { };
 
         this._onEndingMove = null;
-        this._onMouseMove = this.onMouseMove.bind(this);
-        this._onMouseUp = this.onMouseUp.bind(this);
-        this._onMouseDown = this.onMouseDown.bind(this);
-        this._onMouseWheel = this.onMouseWheel.bind(this);
-        this._onContextMenuListener = this.onContextMenuListener.bind(this);
-        this._ondblclick = this.ondblclick.bind(this);
+        this._onTravel = this.travel.bind(this);
         this._onTouchStart = this.onTouchStart.bind(this);
-        this._update = this.update.bind(this);
+        this._onTouchEnd = this.onTouchEnd.bind(this);
         this._onTouchMove = this.onTouchMove.bind(this);
-        this._onKeyDown = this.onKeyDown.bind(this);
-        this._onKeyUp = this.onKeyUp.bind(this);
-        this._onBlurListener = this.onBlurListener.bind(this);
 
-        this.view.domElement.addEventListener('contextmenu', this._onContextMenuListener, false);
-        this.view.domElement.addEventListener('mousedown', this._onMouseDown, false);
-        this.view.domElement.addEventListener('mousewheel', this._onMouseWheel, false);
-        this.view.domElement.addEventListener('dblclick', this._ondblclick, false);
-        this.view.domElement.addEventListener('DOMMouseScroll', this._onMouseWheel, false); // firefox
+        this._onStateChange = this.onStateChange.bind(this);
+
+        this._onRotation = this.handleRotation.bind(this);
+        this._onDrag = this.handleDrag.bind(this);
+        this._onDolly = this.handleDolly.bind(this);
+        this._onPan = this.handlePan.bind(this);
+        this._onPanoramic = this.handlePanoramic.bind(this);
+
+        this._onZoom = this.handleZoom.bind(this);
+
+        this.states.addEventListener('state-changed', this._onStateChange, false);
+
+        this.states.addEventListener(this.states.ORBIT._event, this._onRotation, false);
+        this.states.addEventListener(this.states.MOVE_GLOBE._event, this._onDrag, false);
+        this.states.addEventListener(this.states.DOLLY._event, this._onDolly, false);
+        this.states.addEventListener(this.states.PAN._event, this._onPan, false);
+        this.states.addEventListener(this.states.PANORAMIC._event, this._onPanoramic, false);
+
+        this.states.addEventListener('zoom', this._onZoom, false);
+
         this.view.domElement.addEventListener('touchstart', this._onTouchStart, false);
-        this.view.domElement.addEventListener('touchend', this._onMouseUp, false);
+        this.view.domElement.addEventListener('touchend', this._onTouchEnd, false);
         this.view.domElement.addEventListener('touchmove', this._onTouchMove, false);
 
-        // refresh control for each animation's frame
-        this.player.addEventListener('animation-frame', this._update);
-
-        // TODO: Why windows
-        window.addEventListener('keydown', this._onKeyDown, false);
-        window.addEventListener('keyup', this._onKeyUp, false);
-
-        // Reset key/mouse when window loose focus
-        window.addEventListener('blur', this._onBlurListener);
+        this.states.addEventListener(this.states.TRAVEL_IN._event, this._onTravel, false);
+        this.states.addEventListener(this.states.TRAVEL_OUT._event, this._onTravel, false);
 
         view.scene.add(cameraTarget);
         if (enableTargetHelper) {
             cameraTarget.add(helpers.target);
             view.scene.add(helpers.picking);
-            const layerTHREEjs = view.mainLoop.gfxEngine.getUniqueThreejsLayer();
-            helpers.target.layers.set(layerTHREEjs);
-            helpers.picking.layers.set(layerTHREEjs);
-            this.camera.layers.enable(layerTHREEjs);
         }
 
         if (placement.isExtent) {
@@ -289,17 +319,21 @@ class GlobeControls extends THREE.EventDispatcher {
         }
         positionObject(xyz, cameraTarget);
         this.lookAtCoordinate(placement, false);
+
+        coordCameraTarget.crs = this.view.referenceCrs;
     }
 
-    get dollyInScale() {
+    get zoomInScale() {
         return this.zoomFactor;
     }
-    get dollyOutScale() {
+    get zoomOutScale() {
         return 1 / this.zoomFactor;
     }
 
     get isPaused() {
-        return this.state == this.states.NONE;
+        // TODO : also check if CameraUtils is performing an animation
+        return this.states.currentState === this.states.NONE
+            && !this.player.isPlaying();
     }
 
     onEndingMove(current) {
@@ -307,7 +341,6 @@ class GlobeControls extends THREE.EventDispatcher {
             this.player.removeEventListener('animation-stopped', this._onEndingMove);
             this._onEndingMove = null;
         }
-        this.state = this.states.NONE;
         this.handlingEvent(current);
     }
 
@@ -341,7 +374,6 @@ class GlobeControls extends THREE.EventDispatcher {
     // right and down are positive
     mouseToPan(deltaX, deltaY) {
         const gfx = this.view.mainLoop.gfxEngine;
-        this.state = this.states.PAN;
         if (this.camera.isPerspectiveCamera) {
             let targetDistance = this.camera.position.distanceTo(this.getCameraTargetPosition());
             // half of the fov is center to top of screen
@@ -357,9 +389,10 @@ class GlobeControls extends THREE.EventDispatcher {
         }
     }
 
+    // For Mobile
     dolly(delta) {
         if (delta === 0) { return; }
-        dollyScale = delta > 0 ? this.dollyInScale : this.dollyOutScale;
+        dollyScale = delta > 0 ? this.zoomInScale : this.zoomOutScale;
 
         if (this.camera.isPerspectiveCamera) {
             orbitScale /= dollyScale;
@@ -381,7 +414,7 @@ class GlobeControls extends THREE.EventDispatcher {
         }
     }
 
-    update() {
+    update(state = this.states.currentState) {
         // We compute distance between camera's bounding sphere and geometry's obb up face
         minDistanceZ = Infinity;
         if (this.handleCollision) { // We check distance to the ground/surface geometry
@@ -395,7 +428,7 @@ class GlobeControls extends THREE.EventDispatcher {
                 }
             }
         }
-        switch (this.state) {
+        switch (state) {
             // MOVE_GLOBE Rotate globe with mouse
             case this.states.MOVE_GLOBE:
                 if (minDistanceZ < 0) {
@@ -422,7 +455,8 @@ class GlobeControls extends THREE.EventDispatcher {
                 quaterPano.setFromAxisAngle(normal, sphericalDelta.theta).multiply(quaterAxis.setFromAxisAngle(axisX, sphericalDelta.phi));
                 cameraTarget.position.applyQuaternion(quaterPano);
                 this.camera.localToWorld(cameraTarget.position);
-                break; }
+                break;
+            }
             // ZOOM/ORBIT Move Camera around the target camera
             default: {
                 // get camera position in local space of target
@@ -515,81 +549,165 @@ class GlobeControls extends THREE.EventDispatcher {
             lastQuaternion.copy(this.camera.quaternion);
         }
         // Launch animationdamping if mouse stops these movements
-        if (this.enableDamping && this.state === this.states.ORBIT && this.player.isStopped() && (sphericalDelta.theta > EPS || sphericalDelta.phi > EPS)) {
+        if (this.enableDamping && state === this.states.ORBIT && this.player.isStopped() && (sphericalDelta.theta > EPS || sphericalDelta.phi > EPS)) {
+            this.player.setCallback(() => { this.update(this.states.ORBIT); });
             this.player.playLater(durationDampingOrbital, 2);
+        }
+
+        this.view.dispatchEvent({
+            type: VIEW_EVENTS.CAMERA_MOVED,
+            coord: coordCameraTarget.setFromVector3(cameraTarget.position),
+            range: spherical.radius,
+            heading: -THREE.MathUtils.radToDeg(spherical.theta),
+            tilt: 90 - THREE.MathUtils.radToDeg(spherical.phi),
+        });
+    }
+
+    onStateChange(event) {
+        // If the state changed to NONE, end the movement associated to the previous state.
+        if (this.states.currentState === this.states.NONE) {
+            this.handleEndMovement(event);
+            return;
+        }
+
+        // Stop CameraUtils ongoing animations, which can for instance be triggered with `this.travel` or
+        // `this.lookAtCoordinate` methods.
+        CameraUtils.stop(this.view, this.camera);
+
+        // Dispatch events which specify if changes occurred in camera transform options.
+        this.onEndingMove();
+
+        // Stop eventual damping movement.
+        this.player.stop();
+
+        // Update camera transform options.
+        this.updateTarget();
+        previous = CameraUtils.getTransformCameraLookingAtTarget(this.view, this.camera, pickedPosition);
+
+        // Initialize rotation and panoramic movements.
+        rotateStart.copy(event.viewCoords);
+
+        // Initialize drag movement.
+        if (this.view.getPickingPositionFromDepth(event.viewCoords, pickingPoint)) {
+            pickSphere.radius = pickingPoint.length();
+            lastNormalizedIntersection.copy(pickingPoint).normalize();
+            this.updateHelper(pickingPoint, helpers.picking);
+        }
+
+        // Initialize dolly movement.
+        dollyStart.copy(event.viewCoords);
+        this.view.getPickingPositionFromDepth(event.viewCoords, pickedPosition);        // mouse position
+
+        // Initialize pan movement.
+        panStart.copy(event.viewCoords);
+    }
+
+    handleRotation(event) {
+        // Stop player if needed. Player can be playing while moving mouse in the case of rotation. This is due to the
+        // fact that a damping move can occur while rotating (without the need of releasing the mouse button)
+        this.player.stop();
+        this.handlePanoramic(event);
+    }
+
+    handleDrag(event) {
+        const normalized = this.view.viewToNormalizedCoords(event.viewCoords);
+
+        // An updateMatrixWorld on the camera prevents camera jittering when moving globe on a zoomed out view, with
+        // devtools open in web browser.
+        this.camera.updateMatrixWorld();
+
+        raycaster.setFromCamera(normalized, this.camera);
+
+        // If there's intersection then move globe else we stop the move
+        if (raycaster.ray.intersectSphere(pickSphere, intersection)) {
+            normalizedIntersection.copy(intersection).normalize();
+            moveAroundGlobe.setFromUnitVectors(normalizedIntersection, lastNormalizedIntersection);
+            lastTimeMouseMove = Date.now();
+            this.update();
+        } else {
+            this.states.onPointerUp();
         }
     }
 
-    onMouseMove(event) {
-        if (this.player.isPlaying()) {
-            this.player.stop();
-        }
-        if (this.enabled === false) { return; }
+    handleDolly(event) {
+        dollyEnd.copy(event.viewCoords);
+        dollyDelta.subVectors(dollyEnd, dollyStart);
+        dollyStart.copy(dollyEnd);
+        event.delta = dollyDelta.y;
+        if (event.delta != 0) { this.handleZoom(event); }
+    }
 
-        event.preventDefault();
-        const coords = this.view.eventToViewCoords(event);
-
-        switch (this.state) {
-            case this.states.ORBIT:
-            case this.states.PANORAMIC: {
-                rotateEnd.copy(coords);
-                rotateDelta.subVectors(rotateEnd, rotateStart);
-
-                const gfx = this.view.mainLoop.gfxEngine;
-                this.rotateLeft(2 * Math.PI * rotateDelta.x / gfx.width * this.rotateSpeed);
-                // rotating up and down along whole screen attempts to go 360, but limited to 180
-                this.rotateUp(2 * Math.PI * rotateDelta.y / gfx.height * this.rotateSpeed);
-
-                rotateStart.copy(rotateEnd);
-                break; }
-            case this.states.DOLLY:
-                dollyEnd.copy(coords);
-                dollyDelta.subVectors(dollyEnd, dollyStart);
-
-                this.dolly(-dollyDelta.y);
-                dollyStart.copy(dollyEnd);
-                break;
-            case this.states.PAN:
-                panEnd.copy(coords);
-                panDelta.subVectors(panEnd, panStart);
-
-                this.mouseToPan(panDelta.x, panDelta.y);
-
-                panStart.copy(panEnd);
-                break;
-            case this.states.MOVE_GLOBE: {
-                const normalized = this.view.viewToNormalizedCoords(coords);
-                raycaster.setFromCamera(normalized, this.camera);
-                // If there's intersection then move globe else we stop the move
-                if (raycaster.ray.intersectSphere(pickSphere, intersection)) {
-                    normalizedIntersection.copy(intersection).normalize();
-                    moveAroundGlobe.setFromUnitVectors(normalizedIntersection, lastNormalizedIntersection);
-                    lastTimeMouseMove = Date.now();
-                } else {
-                    this.onMouseUp();
-                }
-                break; }
-            default:
+    handlePan(event) {
+        if (event.viewCoords) {
+            panEnd.copy(event.viewCoords);
+            panDelta.subVectors(panEnd, panStart);
+            panStart.copy(panEnd);
+        } else if (event.direction) {
+            panDelta.copy(direction[event.direction]).multiplyScalar(this.keyPanSpeed);
         }
 
-        if (this.state !== this.states.NONE) {
-            this.update();
+        this.mouseToPan(panDelta.x, panDelta.y);
+
+        this.update(this.states.PAN);
+    }
+
+    handlePanoramic(event) {
+        rotateEnd.copy(event.viewCoords);
+        rotateDelta.subVectors(rotateEnd, rotateStart);
+
+        const gfx = this.view.mainLoop.gfxEngine;
+
+        sphericalDelta.theta -= 2 * Math.PI * rotateDelta.x / gfx.width * this.rotateSpeed;
+        // rotating up and down along whole screen attempts to go 360, but limited to 180
+        sphericalDelta.phi -= 2 * Math.PI * rotateDelta.y / gfx.height * this.rotateSpeed;
+
+        rotateStart.copy(rotateEnd);
+        this.update();
+    }
+
+    handleEndMovement(event = {}) {
+        this.dispatchEvent(this.endEvent);
+
+        this.player.stop();
+
+        // Launch damping movement for :
+        //      * this.states.ORBIT
+        //      * this.states.MOVE_GLOBE
+        if (this.enableDamping) {
+            if (event.previous === this.states.ORBIT && (sphericalDelta.theta > EPS || sphericalDelta.phi > EPS)) {
+                this.player.setCallback(() => { this.update(this.states.ORBIT); });
+                this.player.play(durationDampingOrbital);
+                this._onEndingMove = () => this.onEndingMove();
+                this.player.addEventListener('animation-stopped', this._onEndingMove);
+            } else if (event.previous === this.states.MOVE_GLOBE && (Date.now() - lastTimeMouseMove < 50)) {
+                this.player.setCallback(() => { this.update(this.states.MOVE_GLOBE); });
+                // animation since mouse up event occurs less than 50ms after the last mouse move
+                this.player.play(durationDampingMove);
+                this._onEndingMove = () => this.onEndingMove();
+                this.player.addEventListener('animation-stopped', this._onEndingMove);
+            } else {
+                this.onEndingMove();
+            }
+        } else {
+            this.onEndingMove();
         }
     }
 
     updateTarget() {
-        // Update camera's target position
-        this.view.getPickingPositionFromDepth(null, pickedPosition);
-        const distance = !isNaN(pickedPosition.x) ? this.camera.position.distanceTo(pickedPosition) : 100;
-        targetPosition.set(0, 0, -distance);
-        this.camera.localToWorld(targetPosition);
+        // Check if the middle of the screen is on the globe (to prevent having a dark-screen bug if outside the globe)
+        if (this.view.getPickingPositionFromDepth(null, pickedPosition)) {
+            // Update camera's target position
+            const distance = !isNaN(pickedPosition.x) ? this.camera.position.distanceTo(pickedPosition) : 100;
+            targetPosition.set(0, 0, -distance);
+            this.camera.localToWorld(targetPosition);
 
-        // set new camera target on globe
-        positionObject(targetPosition, cameraTarget);
-        cameraTarget.matrixWorldInverse.copy(cameraTarget.matrixWorld).invert();
-        targetPosition.copy(this.camera.position);
-        targetPosition.applyMatrix4(cameraTarget.matrixWorldInverse);
-        spherical.setFromVector3(targetPosition);
+            // set new camera target on globe
+            positionObject(targetPosition, cameraTarget);
+            cameraTarget.matrixWorldInverse.copy(cameraTarget.matrixWorld).invert();
+            targetPosition.copy(this.camera.position);
+            targetPosition.applyMatrix4(cameraTarget.matrixWorldInverse);
+            spherical.setFromVector3(targetPosition);
+        }
     }
 
     handlingEvent(current) {
@@ -631,166 +749,54 @@ class GlobeControls extends THREE.EventDispatcher {
         }
     }
 
-    onMouseDown(event) {
-        CameraUtils.stop(this.view, this.camera);
+    travel(event) {
         this.player.stop();
-        this.onEndingMove();
-        if (this.enabled === false) { return; }
-
-        this.updateTarget();
-        previous = CameraUtils.getTransformCameraLookingAtTarget(this.view, this.camera, pickedPosition);
-        this.state = this.states.inputToState(event.button, currentKey);
-
-        const coords = this.view.eventToViewCoords(event);
-
-        switch (this.state) {
-            case this.states.ORBIT:
-            case this.states.PANORAMIC:
-                rotateStart.copy(coords);
-                break;
-            case this.states.MOVE_GLOBE: {
-                // update picking on sphere
-                if (this.view.getPickingPositionFromDepth(coords, pickingPoint)) {
-                    pickSphere.radius = pickingPoint.length();
-                    lastNormalizedIntersection.copy(pickingPoint).normalize();
-                    this.updateHelper(pickingPoint, helpers.picking);
-                } else {
-                    this.state = this.states.NONE;
-                }
-                break;
-            }
-            case this.states.DOLLY:
-                dollyStart.copy(coords);
-                break;
-            case this.states.PAN:
-                panStart.copy(coords);
-                break;
-            default:
-        }
-        if (this.state != this.states.NONE) {
-            this.view.domElement.addEventListener('mousemove', this._onMouseMove, false);
-            this.view.domElement.addEventListener('mouseup', this._onMouseUp, false);
-            this.view.domElement.addEventListener('mouseleave', this._onMouseUp, false);
-            this.dispatchEvent(this.startEvent);
-        }
-    }
-
-    ondblclick(event) {
-        if (this.enabled === false || currentKey) { return; }
-        this.player.stop();
-        const point = this.view.getPickingPositionFromDepth(this.view.eventToViewCoords(event));
+        const point = this.view.getPickingPositionFromDepth(event.viewCoords);
         const range = this.getRange(point);
         if (point && range > this.minDistance) {
             return this.lookAtCoordinate({
-                coord: new Coordinates('EPSG:4978', point),
-                range: range * 0.6,
+                coord: new Coordinates('EPSG:4978').setFromVector3(point),
+                range: range * (event.direction === 'out' ? 1 / 0.6 : 0.6),
                 time: 1500,
             });
         }
     }
 
-    onMouseUp() {
-        if (this.enabled === false) { return; }
-
-        this.view.domElement.removeEventListener('mousemove', this._onMouseMove, false);
-        this.view.domElement.removeEventListener('mouseup', this._onMouseUp, false);
-        this.view.domElement.removeEventListener('mouseleave', this._onMouseUp, false);
-        this.dispatchEvent(this.endEvent);
-
+    handleZoom(event) {
         this.player.stop();
-
-        // Launch damping movement for :
-        //      * this.states.ORBIT
-        //      * this.states.MOVE_GLOBE
-        if (this.enableDamping) {
-            if (this.state === this.states.ORBIT && (sphericalDelta.theta > EPS || sphericalDelta.phi > EPS)) {
-                this.player.play(durationDampingOrbital);
-                this._onEndingMove = () => this.onEndingMove();
-                this.player.addEventListener('animation-stopped', this._onEndingMove);
-            } else if (this.state === this.states.MOVE_GLOBE && (Date.now() - lastTimeMouseMove < 50)) {
-                // animation since mouse up event occurs less than 50ms after the last mouse move
-                this.player.play(durationDampingMove);
-                this._onEndingMove = () => this.onEndingMove();
-                this.player.addEventListener('animation-stopped', this._onEndingMove);
-            } else {
-                this.onEndingMove();
-            }
-        } else {
-            this.onEndingMove();
-        }
-    }
-
-    onMouseWheel(event) {
-        this.player.stop();
-        if (!this.enabled || !this.states.DOLLY.enable) { return; }
         CameraUtils.stop(this.view, this.camera);
-        event.preventDefault();
+        const zoomScale = event.delta > 0 ? this.zoomInScale : this.zoomOutScale;
+        let point = event.type === 'dolly' ? pickedPosition : this.view.getPickingPositionFromDepth(event.viewCoords);        // get cursor position
+        let range = this.getRange();
+        range *= zoomScale;
 
-        this.updateTarget();
-        let delta = 0;
+        if (point && (range > this.minDistance && range < this.maxDistance)) {  // check if the zoom is in the allowed interval
+            const camPos = xyz.setFromVector3(cameraTarget.position).as('EPSG:4326', c).toVector3();
+            point = xyz.setFromVector3(point).as('EPSG:4326', c).toVector3();
 
-        // WebKit / Opera / Explorer 9
-        if (event.wheelDelta !== undefined) {
-            delta = event.wheelDelta;
-        // Firefox
-        } else if (event.detail !== undefined) {
-            delta = -event.detail;
-        }
+            if (camPos.x * point.x < 0) {     // Correct rotation at 180th meridian by using 0 <= longitude <=360 for interpolation purpose
+                if (camPos.x - point.x > 180) { point.x += 360; } else if (point.x - camPos.x > 180) { camPos.x += 360; }
+            }
+            point.lerp(  // point interpol between mouse cursor and cam pos
+                camPos,
+                zoomScale, // interpol factor
+            );
 
-        this.dolly(delta);
+            point = c.setFromVector3(point).as('EPSG:4978', xyz);
 
-        const previousRange = this.getRange(pickedPosition);
-        this.update();
-        const newRange = this.getRange(pickedPosition);
-        if (Math.abs(newRange - previousRange) / previousRange > 0.001) {
-            this.dispatchEvent({
-                type: CONTROL_EVENTS.RANGE_CHANGED,
-                previous: previousRange,
-                new: newRange,
-            });
-        }
-        this.dispatchEvent(this.startEvent);
-        this.dispatchEvent(this.endEvent);
-    }
-
-    onKeyUp() {
-        if (this.enabled === false || this.enableKeys === false) { return; }
-        currentKey = undefined;
-    }
-
-    onKeyDown(event) {
-        this.player.stop();
-        if (this.enabled === false || this.enableKeys === false) { return; }
-        currentKey = event.keyCode;
-        switch (event.keyCode) {
-            case this.states.PAN.up:
-                this.mouseToPan(0, this.keyPanSpeed);
-                this.state = this.states.PAN;
-                this.update();
-                break;
-            case this.states.PAN.bottom:
-                this.mouseToPan(0, -this.keyPanSpeed);
-                this.state = this.states.PAN;
-                this.update();
-                break;
-            case this.states.PAN.left:
-                this.mouseToPan(this.keyPanSpeed, 0);
-                this.state = this.states.PAN;
-                this.update();
-                break;
-            case this.states.PAN.right:
-                this.mouseToPan(-this.keyPanSpeed, 0);
-                this.state = this.states.PAN;
-                this.update();
-                break;
-            default:
+            return this.lookAtCoordinate({       // update view to the interpolate point
+                coord: point,
+                range,
+            },
+            false);
         }
     }
 
     onTouchStart(event) {
         // CameraUtils.stop(view);
         this.player.stop();
-        if (this.enabled === false) { return; }
+        // TODO : this.states.enabled check should be removed when moving touch events management to StateControl
+        if (this.states.enabled === false) { return; }
 
         this.state = this.states.touchToState(event.touches.length);
 
@@ -807,7 +813,8 @@ class GlobeControls extends THREE.EventDispatcher {
                     } else {
                         this.state = this.states.NONE;
                     }
-                    break; }
+                    break;
+                }
                 case this.states.ORBIT:
                 case this.states.DOLLY: {
                     const x = event.touches[0].pageX;
@@ -817,7 +824,8 @@ class GlobeControls extends THREE.EventDispatcher {
                     const distance = Math.sqrt(dx * dx + dy * dy);
                     dollyStart.set(0, distance);
                     rotateStart.set(x, y);
-                    break; }
+                    break;
+                }
                 case this.states.PAN:
                     panStart.set(event.touches[0].pageX, event.touches[0].pageY);
                     break;
@@ -832,7 +840,8 @@ class GlobeControls extends THREE.EventDispatcher {
         if (this.player.isPlaying()) {
             this.player.stop();
         }
-        if (this.enabled === false) { return; }
+        // TODO : this.states.enabled check should be removed when moving touch events management to StateControl
+        if (this.states.enabled === false) { return; }
 
         event.preventDefault();
         event.stopPropagation();
@@ -841,6 +850,9 @@ class GlobeControls extends THREE.EventDispatcher {
             case this.states.MOVE_GLOBE.finger: {
                 const coords = this.view.eventToViewCoords(event);
                 const normalized = this.view.viewToNormalizedCoords(coords);
+                // An updateMatrixWorld on the camera prevents camera jittering when moving globe on a zoomed out view, with
+                // devtools open in web browser.
+                this.camera.updateMatrixWorld();
                 raycaster.setFromCamera(normalized, this.camera);
                 // If there's intersection then move globe else we stop the move
                 if (raycaster.ray.intersectSphere(pickSphere, intersection)) {
@@ -848,9 +860,10 @@ class GlobeControls extends THREE.EventDispatcher {
                     moveAroundGlobe.setFromUnitVectors(normalizedIntersection, lastNormalizedIntersection);
                     lastTimeMouseMove = Date.now();
                 } else {
-                    this.onMouseUp.bind(this)();
+                    this.onTouchEnd();
                 }
-                break; }
+                break;
+            }
             case this.states.ORBIT.finger:
             case this.states.DOLLY.finger: {
                 const gfx = this.view.mainLoop.gfxEngine;
@@ -874,7 +887,8 @@ class GlobeControls extends THREE.EventDispatcher {
 
                 dollyStart.copy(dollyEnd);
 
-                break; }
+                break;
+            }
             case this.states.PAN.finger:
                 panEnd.set(event.touches[0].pageX, event.touches[0].pageY);
                 panDelta.subVectors(panEnd, panStart);
@@ -888,40 +902,34 @@ class GlobeControls extends THREE.EventDispatcher {
         }
 
         if (this.state !== this.states.NONE) {
-            this.update();
+            this.update(this.state);
         }
     }
 
-    onContextMenuListener(event) {
-        event.preventDefault();
-    }
-
-    onBlurListener() {
-        this.onKeyUp();
-        this.onMouseUp();
+    onTouchEnd() {
+        this.handleEndMovement({ previous: this.state });
+        this.state = this.states.NONE;
     }
 
     dispose() {
-        this.view.domElement.removeEventListener('contextmenu', this._onContextMenuListener, false);
-
-        this.view.domElement.removeEventListener('mousedown', this._onMouseDown, false);
-        this.view.domElement.removeEventListener('mousemove', this._onMouseMove, false);
-        this.view.domElement.removeEventListener('mousewheel', this._onMouseWheel, false);
-        this.view.domElement.removeEventListener('DOMMouseScroll', this._onMouseWheel, false); // firefox
-        this.view.domElement.removeEventListener('mouseup', this._onMouseUp, false);
-        this.view.domElement.removeEventListener('mouseleave', this._onMouseUp, false);
-        this.view.domElement.removeEventListener('dblclick', this._ondblclick, false);
-
         this.view.domElement.removeEventListener('touchstart', this._onTouchStart, false);
-        this.view.domElement.removeEventListener('touchend', this._onMouseUp, false);
+        this.view.domElement.removeEventListener('touchend', this._onTouchEnd, false);
         this.view.domElement.removeEventListener('touchmove', this._onTouchMove, false);
 
-        this.player.removeEventListener('animation-frame', this._onKeyUp);
+        this.states.dispose();
 
-        window.removeEventListener('keydown', this._onKeyDown, false);
-        window.removeEventListener('keyup', this._onKeyUp, false);
+        this.states.removeEventListener('state-changed', this._onStateChange, false);
 
-        window.removeEventListener('blur', this._onBlurListener);
+        this.states.removeEventListener(this.states.ORBIT._event, this._onRotation, false);
+        this.states.removeEventListener(this.states.MOVE_GLOBE._event, this._onDrag, false);
+        this.states.removeEventListener(this.states.DOLLY._event, this._onDolly, false);
+        this.states.removeEventListener(this.states.PAN._event, this._onPan, false);
+        this.states.removeEventListener(this.states.PANORAMIC._event, this._onPanoramic, false);
+
+        this.states.removeEventListener('zoom', this._onZoom, false);
+
+        this.states.removeEventListener(this.states.TRAVEL_IN._event, this._onTravel, false);
+        this.states.removeEventListener(this.states.TRAVEL_OUT._event, this._onTravel, false);
 
         this.dispatchEvent({ type: 'dispose' });
     }
@@ -1001,7 +1009,7 @@ class GlobeControls extends THREE.EventDispatcher {
      */
     pan(pVector) {
         this.mouseToPan(pVector.x, pVector.y);
-        this.update();
+        this.update(this.states.PAN);
         return Promise.resolve();
     }
 
@@ -1020,7 +1028,9 @@ class GlobeControls extends THREE.EventDispatcher {
      */
 
     getCameraCoordinate() {
-        return new Coordinates('EPSG:4978', this.camera.position).as('EPSG:4326');
+        return new Coordinates('EPSG:4978')
+            .setFromVector3(this.camera.position)
+            .as('EPSG:4326');
     }
 
     /**
@@ -1075,7 +1085,7 @@ class GlobeControls extends THREE.EventDispatcher {
      *
      * @deprecated Use View#getScale instead.
      */
-    getScale(pitch) /* istanbul ignore next */ {
+    getScale(pitch) {
         console.warn('Deprecated, use View#getScale instead.');
         return this.view.getScale(pitch);
     }
@@ -1088,7 +1098,7 @@ class GlobeControls extends THREE.EventDispatcher {
      *
      * @deprecated Use `View#getPixelsToMeters` instead.
      */
-    pixelsToMeters(pixels, pixelPitch = 0.28) /* istanbul ignore next */ {
+    pixelsToMeters(pixels, pixelPitch = 0.28) {
         console.warn('Deprecated use View#getPixelsToMeters instead.');
         const scaled = this.getScale(pixelPitch);
         const size = pixels * pixelPitch;
@@ -1104,7 +1114,7 @@ class GlobeControls extends THREE.EventDispatcher {
      * @deprecated Use `View#getPixelsToMeters` and `GlobeControls#metersToDegrees`
      * instead.
      */
-    pixelsToDegrees(pixels, pixelPitch = 0.28) /* istanbul ignore next */ {
+    pixelsToDegrees(pixels, pixelPitch = 0.28) {
         console.warn('Deprecated, use View#getPixelsToMeters and GlobeControls#getMetersToDegrees instead.');
         const chord = this.pixelsToMeters(pixels, pixelPitch);
         return THREE.MathUtils.radToDeg(2 * Math.asin(chord / (2 * ellipsoidSizes.x)));
@@ -1118,7 +1128,7 @@ class GlobeControls extends THREE.EventDispatcher {
      *
      * @deprecated Use `View#getMetersToPixels` instead.
      */
-    metersToPixels(value, pixelPitch = 0.28) /* istanbul ignore next */ {
+    metersToPixels(value, pixelPitch = 0.28) {
         console.warn('Deprecated, use View#getMetersToPixels instead.');
         const scaled = this.getScale(pixelPitch);
         pixelPitch /= 1000;
@@ -1144,13 +1154,15 @@ class GlobeControls extends THREE.EventDispatcher {
      * Zoom parameter is ignored if range is set
      * The tilt's interval is between 4 and 89.5 degree
      *
-     * @param      {CameraUtils~CameraTransformOptions|Extent}   params camera transformation to apply
-     * @param      {number}   [params.zoom]   zoom
-     * @param      {number}   [params.scale]   scale
-     * @param      {boolean}  isAnimated  Indicates if animated
-     * @return     {Promise}  A promise that resolves when transformation is complete
+     * @param {CameraUtils~CameraTransformOptions|Extent} [params] - camera transformation to apply
+     * @param {number} [params.zoom] - zoom
+     * @param {number} [params.scale] - scale
+     * @param {boolean} [isAnimated] - Indicates if animated
+     * @return {Promise} A promise that resolves when transformation is complete
      */
     lookAtCoordinate(params = {}, isAnimated = this.isAnimationEnabled()) {
+        this.player.stop();
+
         if (!params.isExtent) {
             if (params.zoom) {
                 params.range = this.view.tileLayer.computeDistanceCameraFromTileZoom(params.zoom, this.view.camera);
@@ -1206,7 +1218,9 @@ class GlobeControls extends THREE.EventDispatcher {
             return;
         }
 
-        return new Coordinates('EPSG:4978', pickedPosition).as('EPSG:4326');
+        return new Coordinates('EPSG:4978')
+            .setFromVector3(pickedPosition)
+            .as('EPSG:4326');
     }
 }
 

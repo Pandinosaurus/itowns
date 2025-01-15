@@ -1,14 +1,29 @@
 import { Vector2, Vector3 } from 'three';
 import Protobuf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
-import { globalExtentTMS } from 'Core/Geographic/Extent';
+import { globalExtentTMS } from 'Core/Tile/TileGrid';
 import { FeatureCollection, FEATURE_TYPES } from 'Core/Feature';
 import { deprecatedParsingOptionsToNewOne } from 'Core/Deprecated/Undeprecator';
+import Coordinates from 'Core/Geographic/Coordinates';
 
-const worldDimension3857 = globalExtentTMS.get('EPSG:3857').dimensions();
+const worldDimension3857 = globalExtentTMS.get('EPSG:3857').planarDimensions();
 const globalExtent = new Vector3(worldDimension3857.x, worldDimension3857.y, 1);
 const lastPoint = new Vector2();
 const firstPoint = new Vector2();
+
+// Calculate the projected coordinates in EPSG:4326 of a given point in the VT local system
+// adapted from @mapbox/vector-tile
+function project(x, y, tileNumbers, tileExtent) {
+    const size = tileExtent * 2 ** tileNumbers.z;
+    const x0 = tileExtent * tileNumbers.x;
+    const y0 = tileExtent * tileNumbers.y;
+    const y2 = 180 - (y + y0) * 360 / size;
+    return new Coordinates(
+        'EPSG:4326',
+        (x + x0) * 360 / size - 180,
+        360 / Math.PI * Math.atan(Math.exp(y2 * Math.PI / 180)) - 90,
+    );
+}
 
 // Classify option, it allows to classify a full polygon and its holes.
 // Each polygon with its holes are in one FeatureGeometry.
@@ -17,7 +32,8 @@ const firstPoint = new Vector2();
 // Draw polygon with canvas doesn't need to classify however it is necessary for meshs.
 function vtFeatureToFeatureGeometry(vtFeature, feature, classify = false) {
     let geometry = feature.bindNewGeometry();
-    classify = classify && (feature.type === FEATURE_TYPES.POLYGON);
+    const isPolygon = feature.type === FEATURE_TYPES.POLYGON;
+    classify = classify && isPolygon;
 
     geometry.properties = vtFeature.properties;
     const pbf = vtFeature._pbf;
@@ -58,19 +74,25 @@ function vtFeatureToFeatureGeometry(vtFeature, feature, classify = false) {
                 sum = 0;
             }
             count++;
-            geometry.pushCoordinatesValues(feature, x, y);
+            const coordProj = project(
+                x,
+                y,
+                vtFeature.tileNumbers,
+                vtFeature.extent);
+            geometry.pushCoordinatesValues(feature, { x, y }, coordProj);
             if (count == 1) {
                 firstPoint.set(x, y);
+                firstPoint.coordProj = coordProj;
                 lastPoint.set(x, y);
-            } else if (classify && count > 1) {
+            } else if (isPolygon && count > 1) {
                 sum += (lastPoint.x - x) * (lastPoint.y + y);
                 lastPoint.set(x, y);
             }
         } else if (cmd === 7) {
             if (count) {
                 count++;
-                geometry.pushCoordinatesValues(feature, firstPoint.x, firstPoint.y);
-                if (classify) {
+                geometry.pushCoordinatesValues(feature, { x: firstPoint.x, y: firstPoint.y }, firstPoint.coordProj);
+                if (isPolygon) {
                     sum += (lastPoint.x - firstPoint.x) * (lastPoint.y + firstPoint.y);
                 }
             }
@@ -94,41 +116,55 @@ function vtFeatureToFeatureGeometry(vtFeature, feature, classify = false) {
 function readPBF(file, options) {
     options.out = options.out || {};
     const vectorTile = new VectorTile(new Protobuf(file));
-    const sourceLayers = Object.keys(vectorTile.layers);
+    const vtLayerNames = Object.keys(vectorTile.layers);
 
-    if (sourceLayers.length < 1) {
-        return;
+    const collection = new FeatureCollection(options.out);
+    if (vtLayerNames.length < 1) {
+        return Promise.resolve(collection);
     }
 
     // x,y,z tile coordinates
-    const x = file.extent.col;
-    const z = file.extent.zoom;
+    const x = options.extent.col;
+    const z = options.extent.zoom;
     // We need to move from TMS to Google/Bing/OSM coordinates
     // https://alastaira.wordpress.com/2011/07/06/converting-tms-tile-coordinates-to-googlebingosm-tile-coordinates/
     // Only if the layer.origin is top
-    const y = options.in.isInverted ? file.extent.row : (1 << z) - file.extent.row - 1;
+    const y = options.in.isInverted ? options.extent.row : (1 << z) - options.extent.row - 1;
 
-    const collection = new FeatureCollection(options.out);
-
-    const vFeature = vectorTile.layers[sourceLayers[0]];
-    // TODO: verify if size is correct because is computed with only one feature (vFeature).
-    const size = vFeature.extent * 2 ** z;
+    const vFeature0 = vectorTile.layers[vtLayerNames[0]];
+    // TODO: verify if size is correct because is computed with only one feature (vFeature0).
+    const size = vFeature0.extent * 2 ** z;
     const center = -0.5 * size;
 
     collection.scale.set(globalExtent.x / size, -globalExtent.y / size, 1);
-    collection.position.set(vFeature.extent * x + center, vFeature.extent * y + center, 0).multiply(collection.scale);
+    collection.position.set(vFeature0.extent * x + center, vFeature0.extent * y + center, 0).multiply(collection.scale);
     collection.updateMatrixWorld();
 
-    sourceLayers.forEach((layer_id) => {
-        if (!options.in.layers[layer_id]) { return; }
+    vtLayerNames.forEach((vtLayerName) => {
+        if (!options.in.layers[vtLayerName]) { return Promise.resolve(collection); }
 
-        const sourceLayer = vectorTile.layers[layer_id];
+        const vectorTileLayer = vectorTile.layers[vtLayerName];
 
-        for (let i = sourceLayer.length - 1; i >= 0; i--) {
-            const vtFeature = sourceLayer.feature(i);
-            const layers = options.in.layers[layer_id].filter(l => l.filterExpression.filter({ zoom: z }, vtFeature) && z >= l.zoom.min && z < l.zoom.max);
+        for (let i = vectorTileLayer.length - 1; i >= 0; i--) {
+            const vtFeature = vectorTileLayer.feature(i);
+            vtFeature.tileNumbers = { x, y: options.extent.row, z };
+            // Find layers where this vtFeature is used
+            const layers = options.in.layers[vtLayerName]
+                .filter(l => l.filterExpression.filter({ zoom: z }, vtFeature));
+
+            for (const layer of layers) {
+                const feature = collection.requestFeatureById(layer.id, vtFeature.type - 1);
+                feature.id = layer.id;
+                feature.order = layer.order;
+                feature.style = options.in.styles[feature.id];
+                vtFeatureToFeatureGeometry(vtFeature, feature);
+            }
+
+
+            /*
+            // This optimization is not fully working and need to be reassessed
+            // (see https://github.com/iTowns/itowns/pull/2469/files#r1861802136)
             let feature;
-
             for (const layer of layers) {
                 if (!feature) {
                     feature = collection.requestFeatureById(layer.id, vtFeature.type - 1);
@@ -143,6 +179,7 @@ function readPBF(file, options) {
                     feature.style = options.in.styles[feature.id];
                 }
             }
+            */
         }
     });
 
@@ -151,7 +188,7 @@ function readPBF(file, options) {
     collection.features.sort((a, b) => a.order - b.order);
     // TODO verify if is needed to updateExtent for previous features.
     collection.updateExtent();
-    collection.extent = file.extent;
+    collection.extent = options.extent;
     collection.isInverted = options.in.isInverted;
     return Promise.resolve(collection);
 }
@@ -164,16 +201,16 @@ export default {
      * Parse a vector tile file and return a [Feature]{@link module:GeoJsonParser.Feature}
      * or an array of Features. While multiple formats of vector tile are
      * available, the only one supported for the moment is the
-     * [Mapbox Vector Tile]{@link https://www.mapbox.com/vector-tiles/specification/}.
+     * [Mapbox Vector Tile](https://www.mapbox.com/vector-tiles/specification/).
      *
      * @param {ArrayBuffer} file - The vector tile file to parse.
      *
-     * @param {ParsingOptions} options - Options controlling the parsing {@link ParsingOptions}.
+     * @param {Object} options - Options controlling the parsing {@link ParsingOptions}.
      *
-     * @param {InformationsData} options.in - Object containing all styles,
+     * @param {Object} options.in - Object containing all styles,
      * layers and informations data, see {@link InformationsData}.
      *
-     * @param {Object} options.in.Styles - Object containing subobject with
+     * @param {Object} options.in.styles - Object containing subobject with
      * informations on a specific style layer. Styles available is by `layer.id` and by zoom.
      *
      * @param {Object} options.in.layers - Object containing subobject with

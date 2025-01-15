@@ -49,11 +49,13 @@ class Label extends THREE.Object3D {
      * is applied, it cannot be changed directly. However, if it really needed,
      * it can be accessed through `label.content.style`, but it is highly
      * discouraged to do so.
-     * @param {Object} [sprites] the sprites.
      */
-    constructor(content = '', coordinates, style = {}, sprites) {
+    constructor(content = '', coordinates, style = {}) {
         if (coordinates == undefined) {
             throw new Error('coordinates are mandatory to add a Label');
+        }
+        if (arguments.length > 3) {
+            console.warn('Deprecated argument sprites in Label constructor. Sprites must be configured in style argument.');
         }
 
         super();
@@ -79,28 +81,37 @@ class Label extends THREE.Object3D {
         this.projectedPosition = { x: 0, y: 0 };
         this.boundaries = { left: 0, right: 0, top: 0, bottom: 0 };
 
-        this.content = document.createElement('div');
+        if (typeof content === 'string') {
+            this.content = document.createElement('div');
+            this.content.textContent = style.text.field;
+        } else {
+            this.content = content.cloneNode(true);
+        }
+
         this.content.classList.add('itowns-label');
         this.content.style.userSelect = 'none';
         this.content.style.position = 'absolute';
-        if (typeof content == 'string') {
-            this.content.textContent = content;
-        } else {
-            this.content.appendChild(content);
-        }
-        this.baseContent = content;
 
         if (style.isStyle) {
             this.anchor = style.getTextAnchorPosition();
             this.styleOffset = style.text.offset;
-            if (style.text.haloWidth > 0) {
-                this.content.classList.add('itowns-stroke-single');
+            if (typeof content === 'string') {
+                if (style.text.haloWidth > 0) {
+                    this.content.classList.add('itowns-stroke-single');
+                }
+                style.applyToHTML(this.content)
+                    .then((icon) => {
+                        if (icon) { // Not sure if that test is needed...
+                            this.icon = icon;
+                        }
+                    });
             }
-            style.applyToHTML(this.content, sprites);
         } else {
             this.anchor = [0, 0];
             this.styleOffset = [0, 0];
         }
+
+        this.iconOffset = { left: 0, right: 0, top: 0, bottom: 0 };
 
         this.zoom = {
             min: style.zoom && style.zoom.min != undefined ? style.zoom.min : 2,
@@ -130,11 +141,36 @@ class Label extends THREE.Object3D {
             this.boundaries.right = x + this.offset.right + this.padding;
             this.boundaries.top = y + this.offset.top - this.padding;
             this.boundaries.bottom = y + this.offset.bottom + this.padding;
+
+            // The boundaries of the label are the union of the boundaries of the text
+            // and the boundaries of the icon, if it exists.
+            // Checking if this.icon is not only zeros is mandatory, to prevent case
+            // when a boundary is set to x or y coordinate
+            if (
+                this.iconOffset.left !== 0 || this.iconOffset.right !== 0
+                || this.iconOffset.top !== 0 || this.iconOffset.bottom !== 0
+            ) {
+                this.boundaries.left = Math.min(this.boundaries.left, x + this.iconOffset.left);
+                this.boundaries.right = Math.max(this.boundaries.right, x + this.iconOffset.right);
+                this.boundaries.top = Math.min(this.boundaries.top, y + this.iconOffset.top);
+                this.boundaries.bottom = Math.max(this.boundaries.bottom, y + this.iconOffset.bottom);
+            }
         }
     }
 
     updateCSSPosition() {
-        this.content.style[STYLE_TRANSFORM] = `translate(${this.boundaries.left + this.padding}px, ${this.boundaries.top + this.padding}px)`;
+        // translate all content according to its given anchor
+        this.content.style[STYLE_TRANSFORM] = `translate(${
+            this.projectedPosition.x + this.offset.left
+        }px, ${
+            this.projectedPosition.y + this.offset.top
+        }px)`;
+
+        // translate possible icon inside content to cancel anchoring on it, so that it can later be positioned
+        // according to its own anchor
+        if (this.icon) {
+            this.icon.style[STYLE_TRANSFORM] = `translate(${-this.offset.left}px, ${-this.offset.top}px)`;
+        }
     }
 
     /**
@@ -153,22 +189,37 @@ class Label extends THREE.Object3D {
             };
             this.offset.right = this.offset.left + width;
             this.offset.bottom = this.offset.top + height;
+
+            if (this.icon) {
+                rect = this.icon.getBoundingClientRect();
+                this.iconOffset = {
+                    left: Math.floor(rect.x),
+                    top: Math.floor(rect.y),
+                    right: Math.ceil(rect.x + rect.width),
+                    bottom: Math.ceil(rect.y + rect.height),
+                };
+            }
         }
     }
 
     update3dPosition(crs) {
-        this.coordinates.as(crs, coord);
-        coord.toVector3(this.position);
-        this.parent.worldToLocal(this.position);
+        this.coordinates.as(crs, coord).toVector3(this.position);
         this.updateMatrixWorld();
     }
 
-    updateElevationFromLayer(layer) {
-        const elevation = DEMUtils.getElevationValueAt(layer, this.coordinates, DEMUtils.FAST_READ_Z);
-        if (elevation && elevation != this.coordinates.z) {
+    updateElevationFromLayer(layer, nodes) {
+        if (layer.attachedLayers.filter(l => l.isElevationLayer).length == 0) {
+            return;
+        }
+
+        let elevation = Math.max(0, DEMUtils.getElevationValueAt(layer, this.coordinates, DEMUtils.FAST_READ_Z, nodes));
+
+        if (isNaN(elevation)) {
+            elevation = Math.max(0, DEMUtils.getElevationValueAt(layer, this.coordinates, DEMUtils.FAST_READ_Z));
+        }
+
+        if (!isNaN(elevation) && elevation != this.coordinates.z) {
             this.coordinates.z = elevation;
-            this.updateHorizonCullingPoint();
-            return true;
         }
     }
 

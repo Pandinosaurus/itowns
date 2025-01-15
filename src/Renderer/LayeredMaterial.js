@@ -12,10 +12,11 @@ const defaultTex = new THREE.Texture();
 // from three.js packDepthToRGBA
 const UnpackDownscale = 255 / 256; // 0..1 -> fraction (excluding 1)
 const bitSh = new THREE.Vector4(
-    UnpackDownscale / (256.0 * 256.0 * 256.0),
-    UnpackDownscale / (256.0 * 256.0),
+    UnpackDownscale,
     UnpackDownscale / 256.0,
-    UnpackDownscale);
+    UnpackDownscale / (256.0 * 256.0),
+    UnpackDownscale / (256.0 * 256.0 * 256.0),
+);
 
 export function unpack1K(color, factor) {
     return factor ? bitSh.dot(color) * factor : bitSh.dot(color);
@@ -40,6 +41,7 @@ export const colorLayerEffects = {
 
 const defaultStructLayer = {
     bias: 0,
+    noDataValue: -99999,
     zmin: 0,
     zmax: 0,
     scale: 0,
@@ -49,6 +51,7 @@ const defaultStructLayer = {
     crs: 0,
     effect_parameter: 0,
     effect_type: colorLayerEffects.noEffect,
+    transparent: false,
 };
 
 function updateLayersUniforms(uniforms, olayers, max) {
@@ -93,7 +96,8 @@ export const ELEVATION_MODES = {
 
 let nbSamplers;
 const fragmentShader = [];
-class LayeredMaterial extends THREE.RawShaderMaterial {
+class LayeredMaterial extends THREE.ShaderMaterial {
+    #_visible = true;
     constructor(options = {}, crsCount) {
         super(options);
 
@@ -101,6 +105,8 @@ class LayeredMaterial extends THREE.RawShaderMaterial {
 
         this.defines.NUM_VS_TEXTURES = nbSamplers[0];
         this.defines.NUM_FS_TEXTURES = nbSamplers[1];
+        // TODO: We do not use the fog from the scene, is this a desired
+        // behavior?
         this.defines.USE_FOG = 1;
         this.defines.NUM_CRS = crsCount;
 
@@ -119,12 +125,9 @@ class LayeredMaterial extends THREE.RawShaderMaterial {
             CommonMaterial.setUniformProperty(this, 'outlineColors', outlineColors);
         }
 
-        if (Capabilities.isLogDepthBufferSupported()) {
-            this.defines.USE_LOGDEPTHBUF = 1;
-            this.defines.USE_LOGDEPTHBUF_EXT = 1;
-        }
-
         this.vertexShader = TileVS;
+        // three loop unrolling of ShaderMaterial only supports integer bounds,
+        // see https://github.com/mrdoob/three.js/issues/28020
         fragmentShader[crsCount] = fragmentShader[crsCount] || ShaderUtils.unrollLoops(TileFS, this.defines);
         this.fragmentShader = fragmentShader[crsCount];
 
@@ -142,6 +145,8 @@ class LayeredMaterial extends THREE.RawShaderMaterial {
         CommonMaterial.setUniformProperty(this, 'overlayAlpha', 0);
         CommonMaterial.setUniformProperty(this, 'overlayColor', new THREE.Color(1.0, 0.3, 0.0));
         CommonMaterial.setUniformProperty(this, 'objectId', 0);
+
+        CommonMaterial.setUniformProperty(this, 'geoidHeight', 0.0);
 
         // > 0 produces gaps,
         // < 0 causes oversampling of textures
@@ -166,24 +171,25 @@ class LayeredMaterial extends THREE.RawShaderMaterial {
         this.uniforms.colorOffsetScales = new THREE.Uniform(new Array(nbSamplers[1]).fill(identityOffsetScale));
         this.uniforms.colorTextureCount = new THREE.Uniform(0);
 
-        let _visible = this.visible;
         // can't do an ES6 setter/getter here
         Object.defineProperty(this, 'visible', {
-            get() { return _visible; },
+            // Knowing the visibility of a `LayeredMaterial` is useful. For example in a
+            // `GlobeView`, if you zoom in, "parent" tiles seems hidden; in fact, there
+            // are not, it is only their material (so `LayeredMaterial`) that is set to
+            // not visible.
+
+            // Adding an event when changing this property can be useful to hide others
+            // things, like in `TileDebug`, or in later PR to come (#1303 for example).
+            //
+            // TODO : verify if there is a better mechanism to avoid this event
+            get() { return this.#_visible; },
             set(v) {
-                if (_visible != v) {
-                    _visible = v;
+                if (this.#_visible != v) {
+                    this.#_visible = v;
                     this.dispatchEvent({ type: v ? 'shown' : 'hidden' });
                 }
             },
         });
-    }
-
-    onBeforeCompile(shader, renderer) {
-        if (renderer.capabilities.isWebGL2) {
-            this.defines.WEBGL2 = true;
-            shader.glslVersion = '300 es';
-        }
     }
 
     getUniformByType(type) {

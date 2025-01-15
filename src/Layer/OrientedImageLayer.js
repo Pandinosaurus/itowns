@@ -28,7 +28,7 @@ function updatePano(context, camera, layer) {
         const imagesInfo = layer.cameras.map(cam => ({
             cameraId: cam.name,
             panoId: newPano.id,
-            as: () => {},
+            as: () => { },
         })).filter(info => !panoCameras || panoCameras.includes(info.cameraId));
 
         const command = {
@@ -36,7 +36,6 @@ function updatePano(context, camera, layer) {
             // put informations about image URL as extent to be used by generic DataSourceProvider, OrientedImageSource will use that.
             extentsSource: imagesInfo,
             view: context.view,
-            threejsLayer: layer.threejsLayer,
             requester: newPano,
             earlyDropFunction: commandCancellation,
         };
@@ -49,7 +48,7 @@ function updatePano(context, camera, layer) {
                     layer.material.updateUniforms(context.camera.camera3D);
                     context.view.notifyChange(layer, true);
                 }
-            }, () => {});
+            }, () => { });
     }
 }
 
@@ -63,22 +62,22 @@ function updateBackground(layer) {
 
 function createBackground(radius) {
     if (!radius || radius <= 0) { return undefined; }
-    var geometry = new THREE.SphereGeometry(radius, 32, 32);
-    var material = new THREE.MeshPhongMaterial({
+    const geometry = new THREE.SphereGeometry(radius, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
         color: 0x7777ff,
         side: THREE.DoubleSide,
         transparent: true,
         opacity: 0.5,
         wireframe: true,
     });
-    var sphere = new THREE.Mesh(geometry, material);
+    const sphere = new THREE.Mesh(geometry, material);
     sphere.visible = true;
     sphere.name = 'OrientedImageBackground';
     return sphere;
 }
 
 /**
- * @classdesc OrientedImageLayer loads oriented images, and project these textures on the scene.
+ * OrientedImageLayer loads oriented images, and project these textures on the scene.
  * It is design to create an immersive view. </br>
  * It loads a set of panoramic position and orientation,
  * a set of camera calibration file (it's the same set of camera for each panoramic),
@@ -88,7 +87,6 @@ function createBackground(radius) {
  */
 class OrientedImageLayer extends GeometryLayer {
     /**
-     * @constructor
      * @param { string } id - The id of the layer, a unique name.
      * @param { Object } config - configuration of the layer
      * @param { number } config.backgroundDistance - Radius in meter of the sphere used as a background
@@ -96,22 +94,34 @@ class OrientedImageLayer extends GeometryLayer {
      * @param { string } config.crs - crs projection of the view
      * @param { string } config.orientation - Json object, using GeoJSon format to represent points,
      * it's a set of panoramic position and orientation.
-     * @param { string } config.calibrations - Json object, representing a set of camera. see [CameraCalibrationParser]{@link module:CameraCalibrationParser}
+     * @param { string } config.calibrations - Json object, representing a set of camera.
+     * see {@link CameraCalibrationParser}
      * @param { OrientedImageSource } config.source - Source used to build url of texture for each oriented image,
      * a tecture is need for each camera, for each panoramic.
      */
     constructor(id, config = {}) {
-        /* istanbul ignore next */
+        const {
+            backgroundDistance,
+            background = createBackground(backgroundDistance),
+            onPanoChanged = () => { },
+            getCamerasNameFromFeature = () => { },
+            ...geometryOptions
+        } = config;
+
         if (config.projection) {
             console.warn('OrientedImageLayer projection parameter is deprecated, use crs instead.');
             config.crs = config.crs || config.projection;
         }
-        super(id, new THREE.Group(), config);
+        super(id, new THREE.Group(), geometryOptions);
 
-        this.background = config.background || createBackground(config.backgroundDistance);
         this.isOrientedImageLayer = true;
 
+        this.background = background;
+
         if (this.background) {
+            // Add layer id to easily identify the objects later on (e.g. to delete the geometries when deleting the layer)
+            this.background.layer = this.background.layer ?? {};
+            this.background.layer.id = this.background.layer.id ?? id;
             this.object3d.add(this.background);
         }
 
@@ -119,20 +129,21 @@ class OrientedImageLayer extends GeometryLayer {
         this.currentPano = undefined;
 
         // store a callback to fire event when current panoramic change
-        this.onPanoChanged = config.onPanoChanged || (() => {});
+        this.onPanoChanged = onPanoChanged;
 
         // function to get cameras name from panoramic feature
-        this.getCamerasNameFromFeature = config.getCamerasNameFromFeature || (() => {});
+        this.getCamerasNameFromFeature = getCamerasNameFromFeature;
 
         const resolve = this.addInitializationStep();
 
         this.mergeFeatures = false;
         this.filteringExtent = false;
+        this.accurate = true;
         const options = { out: this };
 
         // panos is an array of feature point, representing many panoramics.
         // for each point, there is a position and a quaternion attribute.
-        this.source.whenReady.then(metadata => GeoJsonParser.parse(config.orientation || metadata.orientation, options).then((orientation) =>  {
+        this.source.whenReady.then(metadata => GeoJsonParser.parse(config.orientation || metadata.orientation, options).then((orientation) => {
             this.panos = orientation.features;
 
             // the crs input is parsed in geojson parser
@@ -159,7 +170,7 @@ class OrientedImageLayer extends GeometryLayer {
             }
         }).then(() => {
             // array of cameras, represent the projective texture configuration for each panoramic.
-            CameraCalibrationParser.parse(config.calibration  || metadata.calibration, config).then((cameras) => {
+            CameraCalibrationParser.parse(config.calibration || metadata.calibration, config).then((cameras) => {
                 this.cameras = cameras;
                 // create the material
                 this.material = new OrientedImageMaterial(this.cameras, config);
@@ -187,7 +198,7 @@ class OrientedImageLayer extends GeometryLayer {
     }
 
     getNextPano() {
-        var index = (this.currentPano.index + 1) % this.panos.length;
+        const index = (this.currentPano.index + 1) % this.panos.length;
         return this.panos[index];
     }
 
@@ -196,7 +207,7 @@ class OrientedImageLayer extends GeometryLayer {
     }
 
     getPreviousPano() {
-        var index = (this.currentPano.index - 1) % this.panos.length;
+        const index = (this.currentPano.index - 1) % this.panos.length;
         return this.panos[index];
     }
 
@@ -204,9 +215,16 @@ class OrientedImageLayer extends GeometryLayer {
      * Delete background, but doesn't delete OrientedImageLayer.material. For the moment, this material visibility is set to false.
      * You need to replace OrientedImageLayer.material applied on each object, if you want to continue displaying them.
      * This issue (see #1018 {@link https://github.com/iTowns/itowns/issues/1018}) will be fixed when OrientedImageLayer will be a ColorLayer.
-     */
-    delete() {
-        super.delete();
+    * @param {boolean} [clearCache=false] Whether to clear the layer cache or not
+    */
+    delete(clearCache) {
+        if (this.background) {
+            // only delete geometries if it has some
+            super.delete();
+        }
+        if (clearCache) {
+            this.cache.clear();
+        }
         this.material.visible = false;
         console.warn('You need to replace OrientedImageLayer.material applied on each object. This issue will be fixed when OrientedImageLayer will be a ColorLayer. the material visibility is set to false. To follow issue see https://github.com/iTowns/itowns/issues/1018');
     }

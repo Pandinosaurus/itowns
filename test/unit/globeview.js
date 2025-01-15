@@ -7,10 +7,7 @@ import Extent from 'Core/Geographic/Extent';
 import Renderer from './bootstrap';
 import CameraUtils from '../../src/Utils/CameraUtils';
 import OBB from '../../src/Renderer/OBB';
-
-function compareWithEpsilon(a, b, epsilon) {
-    return a - epsilon < b && a + epsilon > b;
-}
+import { compareWithEpsilon } from './utils';
 
 describe('GlobeView', function () {
     const renderer = new Renderer();
@@ -23,7 +20,7 @@ describe('GlobeView', function () {
     pickedPosition.copy(viewer.camera.position());
 
     const cameraDirection = new THREE.Vector3();
-    viewer.camera.camera3D.getWorldDirection(cameraDirection);
+    viewer.camera3D.getWorldDirection(cameraDirection);
     cameraDirection.multiplyScalar(placement.range);
     pickedPosition.add(cameraDirection);
 
@@ -46,20 +43,22 @@ describe('GlobeView', function () {
     });
 
     it('update', function (done) {
-        viewer.tileLayer.whenReady.then(() => {
-            const node = viewer.tileLayer.level0Nodes[0];
-            viewer.tileLayer.update(context, viewer.tileLayer, node);
-            done();
-        });
+        viewer.tileLayer.whenReady
+            .then(() => {
+                const node = viewer.tileLayer.level0Nodes[0];
+                viewer.tileLayer.update(context, viewer.tileLayer, node);
+                done();
+            }).catch(done);
     });
 
     it('ObjectRemovalHelper', function (done) {
-        viewer.tileLayer.whenReady.then(() => {
-            const node = viewer.tileLayer.level0Nodes[0];
-            ObjectRemovalHelper.removeChildrenAndCleanup(viewer.tileLayer, node);
-            ObjectRemovalHelper.removeChildren(viewer.tileLayer, node);
-            done();
-        });
+        viewer.tileLayer.whenReady
+            .then(() => {
+                const node = viewer.tileLayer.level0Nodes[0];
+                ObjectRemovalHelper.removeChildrenAndCleanup(viewer.tileLayer, node);
+                ObjectRemovalHelper.removeChildren(viewer.tileLayer, node);
+                done();
+            }).catch(done);
     });
 
     it('should get the zoom scale', () => {
@@ -98,14 +97,12 @@ describe('GlobeView', function () {
             extent,
             { renderer },
         );
-        const camera3D = extentViewer.camera.camera3D;
         const size = new THREE.Vector3();
         new OBB().setFromExtent(extent).box3D.getSize(size);
         assert.ok(
-            CameraUtils.getTransformCameraLookingAtTarget(extentViewer, camera3D).range -
-            size.x / (2 * Math.tan(THREE.Math.degToRad(camera3D.fov) / 2))
-            < Math.pow(10, -6),
+            CameraUtils.getTransformCameraLookingAtTarget(extentViewer, extentViewer.camera3D).range -
+            size.x / (2 * Math.tan(THREE.MathUtils.degToRad(extentViewer.camera3D.fov) / 2))
+            < 10 ** -6,
         );
     });
 });
-

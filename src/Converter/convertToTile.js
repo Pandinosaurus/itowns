@@ -1,26 +1,19 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 import * as THREE from 'three';
 import TileMesh from 'Core/TileMesh';
 import LayeredMaterial from 'Renderer/LayeredMaterial';
-import newTileGeometry from 'Core/Prefab/TileBuilder';
+import { newTileGeometry } from 'Core/Prefab/TileBuilder';
+import ReferLayerProperties from 'Layer/ReferencingLayerProperties';
+import { geoidLayerIsVisible } from 'Layer/GeoidLayer';
 
 const dimensions = new THREE.Vector2();
 
 function setTileFromTiledLayer(tile, tileLayer) {
-    tile.material.transparent = tileLayer.opacity < 1.0;
-    tile.material.opacity = tileLayer.opacity;
-
     if (tileLayer.diffuse) {
         tile.material.diffuse = tileLayer.diffuse;
     }
 
     if (__DEBUG__) {
         tile.material.showOutline = tileLayer.showOutline || false;
-        tile.material.wireframe = tileLayer.wireframe || false;
     }
 
     if (tileLayer.isGlobeLayer) {
@@ -28,7 +21,7 @@ function setTileFromTiledLayer(tile, tileLayer) {
         // If the point is below the horizon,
         // the tile is guaranteed to be below the horizon as well.
         tile.horizonCullingPoint = tile.extent.center().as('EPSG:4978').toVector3();
-        tile.extent.dimensions(dimensions).multiplyScalar(THREE.MathUtils.DEG2RAD);
+        tile.extent.planarDimensions(dimensions).multiplyScalar(THREE.MathUtils.DEG2RAD);
 
         // alpha is maximum angle between two points of tile
         const alpha = dimensions.length();
@@ -47,24 +40,23 @@ export default {
         const paramsGeometry = {
             extent,
             level,
-            segment: layer.segments || 16,
+            segments: layer.segments || 16,
             disableSkirt: layer.disableSkirt,
+            hideSkirt: layer.hideSkirt,
         };
 
         return newTileGeometry(builder, paramsGeometry).then((result) => {
             // build tile mesh
-            result.geometry._count++;
+            result.geometry.increaseRefCount();
             const crsCount = layer.tileMatrixSets.length;
             const material = new LayeredMaterial(layer.materialOptions, crsCount);
-            const tile = new TileMesh(result.geometry, material, layer, extent, level);
+            ReferLayerProperties(material, layer);
 
-            // Commented because layer.threejsLayer is undefined;
-            // Fix me: conflict with object3d added in view.scene;
-            // tile.layers.set(layer.threejsLayer);
+            const tile = new TileMesh(result.geometry, material, layer, extent, level);
 
             if (parent && parent.isTileMesh) {
                 // get parent extent transformation
-                const pTrans = builder.computeSharableExtent(parent.extent);
+                const pTrans = builder.computeShareableExtent(parent.extent);
                 // place relative to his parent
                 result.position.sub(pTrans.position).applyQuaternion(pTrans.quaternion.invert());
                 result.quaternion.premultiply(pTrans.quaternion);
@@ -75,12 +67,13 @@ export default {
             tile.visible = false;
             tile.updateMatrix();
 
-            tile.add(tile.obb);
-
             setTileFromTiledLayer(tile, layer);
 
             if (parent) {
-                tile.setBBoxZ(parent.obb.z.min, parent.obb.z.max);
+                tile.geoidHeight = parent.geoidHeight;
+                const geoidHeight = geoidLayerIsVisible(layer) ? tile.geoidHeight : 0;
+                tile.setBBoxZ({ min: parent.obb.z.min, max: parent.obb.z.max, geoidHeight });
+                tile.material.geoidHeight = geoidHeight;
             }
 
             return tile;

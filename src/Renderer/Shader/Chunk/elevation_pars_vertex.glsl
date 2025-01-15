@@ -11,6 +11,7 @@
     uniform sampler2D   elevationTextures[NUM_VS_TEXTURES];
     uniform vec4        elevationOffsetScales[NUM_VS_TEXTURES];
     uniform int         elevationTextureCount;
+    uniform float       geoidHeight;
 
     highp float decode32(highp vec4 rgba) {
         highp float Sign = 1.0 - step(128.0,rgba[0])*2.0;
@@ -24,18 +25,15 @@
         if (mode == ELEVATION_RGBA)
             return decode32(texture2D( tex, uv ).abgr * 255.0);
         if (mode == ELEVATION_DATA || mode == ELEVATION_COLOR)
-        #if defined(WEBGL2)
             return texture2D( tex, uv ).r;
-        #else
-            return texture2D( tex, uv ).w;
-        #endif
         return 0.;
     }
 
     float getElevation(vec2 uv, sampler2D tex, vec4 offsetScale, Layer layer) {
+        // Elevation textures are inverted along the y-axis
+        uv = vec2(uv.x, 1.0 - uv.y);
         uv = uv * offsetScale.zw + offsetScale.xy;
-        float d = getElevationMode(uv, tex, layer.mode);
-        if (d < layer.zmin || d > layer.zmax) d = 0.;
+        float d = clamp(getElevationMode(uv, tex, layer.mode), layer.zmin, layer.zmax);
         return d * layer.scale + layer.bias;
     }
 #endif

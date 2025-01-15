@@ -1,22 +1,24 @@
 import * as THREE from 'three';
-import TileGeometry from 'Core/TileGeometry';
-import BuilderEllipsoidTile from 'Core/Prefab/Globe/BuilderEllipsoidTile';
+import * as CRS from 'Core/Geographic/Crs';
+import { TileGeometry } from 'Core/TileGeometry';
+import { GlobeTileBuilder } from 'Core/Prefab/Globe/GlobeTileBuilder';
 import Coordinates from 'Core/Geographic/Coordinates';
-import CRS from 'Core/Geographic/Crs';
 
 // get oriented bounding box of tile
-const builder = new BuilderEllipsoidTile({ crs: 'EPSG:4978', uvCount: 1 });
+const builder = new GlobeTileBuilder({ uvCount: 1 });
 const size = new THREE.Vector3();
 const dimension = new THREE.Vector2();
 const center = new THREE.Vector3();
 const coord = new Coordinates('EPSG:4326', 0, 0, 0);
 let obb;
 
+// it could be considered to remove THREE.Object3D extend.
+/**
+ * Oriented bounding box
+ * @extends THREE.Object3D
+ */
 class OBB extends THREE.Object3D {
     /**
-     * Oriented bounding box
-     * @constructor
-     * @extends THREE.Object3D
      * @param {THREE.Vector3}  min representing the lower (x, y, z) boundary of the box. Default is ( + Infinity, + Infinity, + Infinity ).
      * @param {THREE.Vector3}  max representing the lower upper (x, y, z) boundary of the box. Default is ( - Infinity, - Infinity, - Infinity ).
      */
@@ -25,7 +27,6 @@ class OBB extends THREE.Object3D {
         this.box3D = new THREE.Box3(min.clone(), max.clone());
         this.natBox = this.box3D.clone();
         this.z = { min: 0, max: 0, scale: 1.0 };
-        return this;
     }
 
     /**
@@ -54,30 +55,25 @@ class OBB extends THREE.Object3D {
     }
 
     /**
-     * Update the top point world
+     * Update z min, z max and z scale of oriented bounding box
      *
+     * @param {Object}  [elevation={}]
+     * @param {number}  [elevation.min]             The minimum of oriented bounding box
+     * @param {number}  [elevation.max]             The maximum of oriented bounding box
+     * @param {number}  [elevation.scale]           The scale of oriented bounding box Z axis
+     * @param {number}  [elevation.geoidHeight]     The geoid height added to ellipsoid.
      */
-    update() {
-        this.updateMatrixWorld(true);
-    }
+    updateZ(elevation = {}) {
+        this.z.min = elevation.min ?? this.z.min;
+        this.z.max = elevation.max ?? this.z.max;
 
-    /**
-     * Update z min and z max of oriented bounding box
-     *
-     * @param {number}  min The minimum of oriented bounding box
-     * @param {number}  max The maximum of oriented bounding box
-     * @param {number} scale
-     */
-    updateZ(min, max, scale = this.z.scale) {
-        this.z = { min, max, scale, delta: Math.abs(max - min) * scale };
-        this.box3D.min.z = this.natBox.min.z + min * scale;
-        this.box3D.max.z = this.natBox.max.z + max * scale;
-    }
+        this.z.scale = elevation.scale > 0 ? elevation.scale : this.z.scale;
+        this.z.delta = Math.abs(this.z.max - this.z.min) * this.z.scale;
 
-    updateScaleZ(scale) {
-        if (scale > 0) {
-            this.updateZ(this.z.min, this.z.max, scale);
-        }
+        const geoidHeight = elevation.geoidHeight || 0;
+
+        this.box3D.min.z = this.natBox.min.z + this.z.min * this.z.scale + geoidHeight;
+        this.box3D.max.z = this.natBox.max.z + this.z.max * this.z.scale + geoidHeight;
     }
 
     /**
@@ -94,7 +90,7 @@ class OBB extends THREE.Object3D {
 
         // this is the same as isPointInsideSphere.position
         const distance = Math.sqrt((x - localSpherePosition.x) * (x - localSpherePosition.x) +
-                               (y - localSpherePosition.y) * (y - localSpherePosition.y));
+            (y - localSpherePosition.y) * (y - localSpherePosition.y));
 
         return distance < sphere.radius;
     }
@@ -110,29 +106,28 @@ class OBB extends THREE.Object3D {
      */
     setFromExtent(extent, minHeight = extent.min || 0, maxHeight = extent.max || 0) {
         if (extent.crs == 'EPSG:4326') {
-            const { sharableExtent, quaternion, position } = builder.computeSharableExtent(extent);
+            const { shareableExtent, quaternion, position } = builder.computeShareableExtent(extent);
             // Compute the minimum count of segment to build tile
-            const segment = Math.max(Math.floor(sharableExtent.dimensions(dimension).x / 90 + 1), 2);
+            const segments = Math.max(Math.floor(shareableExtent.planarDimensions(dimension).x / 90 + 1), 2);
             const paramsGeometry = {
-                extent: sharableExtent,
+                extent: shareableExtent,
                 level: 0,
-                segment,
+                segments,
                 disableSkirt: true,
-                builder,
             };
 
-            const geometry = new TileGeometry(paramsGeometry);
+            const geometry = new TileGeometry(builder, paramsGeometry);
             obb.box3D.copy(geometry.boundingBox);
             obb.natBox.copy(geometry.boundingBox);
             this.copy(obb);
 
-            this.updateZ(minHeight, maxHeight);
+            this.updateZ({ min: minHeight, max: maxHeight });
             this.position.copy(position);
             this.quaternion.copy(quaternion);
             this.updateMatrixWorld(true);
-        } else if (!CRS.isTms(extent.crs) && CRS.isMetricUnit(extent.crs)) {
+        } else if (CRS.isMetricUnit(extent.crs)) {
             extent.center(coord).toVector3(this.position);
-            extent.dimensions(dimension);
+            extent.planarDimensions(dimension);
             size.set(dimension.x, dimension.y, Math.abs(maxHeight - minHeight));
             this.box3D.setFromCenterAndSize(center, size);
             this.updateMatrixWorld(true);

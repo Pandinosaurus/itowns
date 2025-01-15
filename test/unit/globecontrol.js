@@ -3,6 +3,7 @@ import assert from 'assert';
 import GlobeView from 'Core/Prefab/GlobeView';
 import Coordinates from 'Core/Geographic/Coordinates';
 import { getLookAtFromMath, getRig } from 'Utils/CameraUtils';
+import StateControl from 'Controls/StateControl';
 import Renderer from './bootstrap';
 
 describe('GlobeControls', function () {
@@ -13,8 +14,8 @@ describe('GlobeControls', function () {
     const controls = viewer.controls;
 
     viewer.getPickingPositionFromDepth = (coords, pickingPoint) => {
-        viewer.camera.camera3D.updateMatrixWorld();
-        const lookAt = getLookAtFromMath(viewer, viewer.camera.camera3D);
+        viewer.camera3D.updateMatrixWorld();
+        const lookAt = getLookAtFromMath(viewer, viewer.camera3D);
         if (lookAt) {
             if (pickingPoint) {
                 pickingPoint.copy(lookAt);
@@ -43,6 +44,10 @@ describe('GlobeControls', function () {
         assert.ok(controls);
     });
 
+    it('should instantiate StateControl', function () {
+        assert(controls.states instanceof StateControl);
+    });
+
     it('pickGeoPosition', function () {
         const pick = controls.pickGeoPosition();
         assert.equal((placement.coord.longitude / pick.longitude).toFixed(8), 1);
@@ -53,19 +58,21 @@ describe('GlobeControls', function () {
     const heading = 4;
 
     it('Set tilt', function (done) {
-        controls.setTilt(tilt, false).then((e) => {
-            assert.equal(e.tilt, tilt);
-            assert.equal((tilt / controls.getTilt()).toFixed(8), 1);
-            done();
-        });
+        controls.setTilt(tilt, false)
+            .then((e) => {
+                assert.equal(e.tilt, tilt);
+                assert.equal((tilt / controls.getTilt()).toFixed(8), 1);
+                done();
+            }).catch(done);
     });
 
     it('Set heading', function (done) {
-        controls.setHeading(heading, false).then((e) => {
-            assert.equal(e.heading, heading);
-            assert.equal((heading / controls.getHeading()).toFixed(8), 1);
-            done();
-        });
+        controls.setHeading(heading, false)
+            .then((e) => {
+                assert.equal(e.heading, heading);
+                assert.equal((heading / controls.getHeading()).toFixed(8), 1);
+                done();
+            }).catch(done);
     });
 
     it('getCameraOrientation', function () {
@@ -86,69 +93,46 @@ describe('GlobeControls', function () {
 
     it('Set zoom', function (done) {
         const zoom = 10;
-        controls.setZoom(zoom, false).then(() => {
-            assert.equal(zoom, controls.getZoom());
-            done();
-        });
+        controls.setZoom(zoom, false)
+            .then(() => {
+                assert.equal(zoom, controls.getZoom());
+                done();
+            }).catch(done);
     });
 
     it('Set range', function (done) {
         const range = 1000;
-        controls.setRange(range, false).then((e) => {
-            assert.equal((e.range / range).toFixed(8), 1);
-            done();
-        });
+        controls.setRange(range, false)
+            .then((e) => {
+                assert.equal((e.range / range).toFixed(8), 1);
+                done();
+            }).catch(done);
     });
 
     it('Set scale', function (done) {
         const scale = 0.0002;
-        controls.setScale(scale, 0.28, false).then(() => {
-            assert.equal((viewer.getScale() / scale).toFixed(8), 1);
-            done();
-        });
+        controls.setScale(scale, 0.28, false)
+            .then(() => {
+                assert.equal((viewer.getScale() / scale).toFixed(8), 1);
+                done();
+            }).catch(done);
     });
 
     it('update', function () {
         const c1 = controls.getLookAtCoordinate();
         controls.mouseToPan(100, 100);
-        controls.state = controls.states.PAN;
-        controls.update();
-        controls.state = controls.states.NONE;
+        controls.update(controls.states.PAN);
         const c2 = controls.getLookAtCoordinate();
         assert.ok(c1.longitude > c2.longitude);
         assert.ok(c1.latitude < c2.latitude);
     });
 
     it('isPaused', function () {
-        controls.state = controls.states.NONE;
+        controls.states.currentState = controls.states.NONE;
         assert.ok(controls.isPaused);
-        controls.state = controls.states.PANORAMIC;
+        controls.states.currentState = controls.states.PANORAMIC;
         assert.ok(!controls.isPaused);
-        controls.state = controls.states.NONE;
-    });
-
-    it('keydown', function () {
-        event.keyCode = controls.states.PAN.up;
-        controls.onKeyDown(event);
-        assert.equal(controls.state, controls.states.PAN);
-        event.keyCode = controls.states.PAN.bottom;
-        controls.onKeyDown(event);
-        assert.equal(controls.state, controls.states.PAN);
-        event.keyCode = controls.states.PAN.left;
-        controls.onKeyDown(event);
-        assert.equal(controls.state, controls.states.PAN);
-        event.keyCode = controls.states.PAN.right;
-        controls.onKeyDown(event);
-        assert.equal(controls.state, controls.states.PAN);
-    });
-
-    it('mouse down', function () {
-        controls.onKeyUp();
-        controls.onMouseDown(event);
-        assert.ok(controls.state == controls.states.MOVE_GLOBE);
-        controls.onMouseMove(event);
-        controls.onMouseUp(event);
-        assert.ok(controls.state == controls.states.NONE);
+        controls.states.currentState = controls.states.NONE;
     });
 
     it('dolly', function () {
@@ -156,41 +140,46 @@ describe('GlobeControls', function () {
         controls.state = controls.states.ORBIT;
         controls.update();
         controls.dolly(-1);
+        controls.update();
         controls.state = controls.states.NONE;
     });
 
-    it('mouse down + crtl', function () {
-        event.keyCode = 17;
-        controls.onKeyDown(event);
-        assert.ok(controls.states.NONE == controls.state);
-        controls.onMouseDown(event);
-        assert.ok(controls.states.ORBIT == controls.state);
-        controls.onMouseMove(event);
-        assert.ok(controls.states.ORBIT == controls.state);
-        controls.onMouseUp(event);
-        assert.ok(controls.states.NONE == controls.state);
-        controls.onKeyUp(event);
-        assert.ok(controls.states.NONE == controls.state);
-    });
-
-    it('mouse wheel', function () {
+    it('zoom', function () {
         const startRange = controls.getRange();
-        event.wheelDelta = -10;
-        controls.onMouseWheel(event);
-        assert.ok(controls.getRange() > startRange);
-        event.wheelDelta = 10;
-        controls.onMouseWheel(event);
-        controls.onMouseWheel(event);
+        event.delta = -10;
+        controls.handleZoom(event);
         assert.ok(controls.getRange() < startRange);
+        event.delta = 10;
+        controls.handleZoom(event);
+        controls.handleZoom(event);
+        assert.ok(controls.getRange() > startRange);
     });
 
-    it('mouse dblclick', function (done) {
+    it('travel in', function (done) {
         controls.setAnimationEnabled(false);
         const startRange = controls.getRange();
-        controls.ondblclick(event).then(() => {
-            assert.ok(controls.getRange() < startRange);
-            done();
-        });
+        controls.travel({
+            viewCoords: viewer.eventToViewCoords(event),
+            type: 'travel_in',
+            direction: 'in',
+        })
+            .then(() => {
+                assert.ok(controls.getRange() < startRange);
+                done();
+            }).catch(done);
+    });
+
+    it('travel out', function (done) {
+        const startRange = controls.getRange();
+        controls.travel({
+            viewCoords: viewer.eventToViewCoords(event),
+            type: 'travel_out',
+            direction: 'out',
+        })
+            .then(() => {
+                assert.ok(controls.getRange() > startRange);
+                done();
+            }).catch(done);
     });
 
     it('touch start', function () {
@@ -209,39 +198,20 @@ describe('GlobeControls', function () {
         controls.onTouchMove(event);
     });
 
-    it('onContextMenuListener', function () {
-        controls.onContextMenuListener(event);
-    });
-
-    it('onBlurListener', function () {
-        controls.state = controls.states.MOVE_GLOBE;
-        controls.onBlurListener(event);
-        assert.ok(controls.states.NONE == controls.state);
-    });
-
     it('lookAtCoordinate with animation', function (done) {
-        const rig = getRig(viewer.camera.camera3D);
+        const rig = getRig(viewer.camera3D);
         let i;
-        controls.lookAtCoordinate({ coord: placement.coord, time: 10 }, true).then((e) => {
-            assert.equal((e.coord.longitude / placement.coord.longitude).toFixed(8), 1);
-            assert.equal((e.coord.latitude / placement.coord.latitude).toFixed(8), 1);
-            clearInterval(i);
-            done();
-        });
+        controls.lookAtCoordinate({ coord: placement.coord, time: 10 }, true)
+            .then((e) => {
+                assert.equal((e.coord.longitude / placement.coord.longitude).toFixed(8), 1);
+                assert.equal((e.coord.latitude / placement.coord.latitude).toFixed(8), 1);
+                clearInterval(i);
+                done();
+            }).catch(done);
 
         if (rig.animationFrameRequester) {
             i = setInterval(rig.animationFrameRequester, 10);
         }
-    });
-
-    it('mouse down enableDamping', function () {
-        controls.enableDamping = true;
-        controls.onKeyUp();
-        controls.onMouseDown(event);
-        assert.ok(controls.state == controls.states.MOVE_GLOBE);
-        controls.onMouseMove(event);
-        controls.onMouseUp(event);
-        assert.ok(controls.state == controls.states.MOVE_GLOBE);
     });
 
     it('dispose', function () {

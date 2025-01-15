@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import color_layers_pars_fragment from './Chunk/color_layers_pars_fragment.glsl';
 import elevation_pars_vertex from './Chunk/elevation_pars_vertex.glsl';
 import elevation_vertex from './Chunk/elevation_vertex.glsl';
+import geoid_vertex from './Chunk/geoid_vertex.glsl';
 import fog_fragment from './Chunk/fog_fragment.glsl';
 import fog_pars_fragment from './Chunk/fog_pars_fragment.glsl';
 import lighting_fragment from './Chunk/lighting_fragment.glsl';
@@ -13,12 +14,9 @@ import overlay_fragment from './Chunk/overlay_fragment.glsl';
 import overlay_pars_fragment from './Chunk/overlay_pars_fragment.glsl';
 import pitUV from './Chunk/pitUV.glsl';
 import precision_qualifier from './Chunk/precision_qualifier.glsl';
-import project_pars_vertex from './Chunk/project_pars_vertex.glsl';
 import projective_texturing_vertex from './Chunk/projective_texturing_vertex.glsl';
 import projective_texturing_pars_vertex from './Chunk/projective_texturing_pars_vertex.glsl';
 import projective_texturing_pars_fragment from './Chunk/projective_texturing_pars_fragment.glsl';
-import WebGL2_pars_vertex from './Chunk/WebGL2_pars_vertex.glsl';
-import WebGL2_pars_fragment from './Chunk/WebGL2_pars_fragment.glsl';
 
 const custom_header_colorLayer = '// no custom header';
 const custom_body_colorLayer = '// no custom body';
@@ -29,6 +27,7 @@ const itownsShaderChunk = {
     custom_header_colorLayer,
     elevation_pars_vertex,
     elevation_vertex,
+    geoid_vertex,
     fog_fragment,
     fog_pars_fragment,
     lighting_fragment,
@@ -43,9 +42,6 @@ const itownsShaderChunk = {
     projective_texturing_vertex,
     projective_texturing_pars_vertex,
     projective_texturing_pars_fragment,
-    project_pars_vertex,
-    WebGL2_pars_vertex,
-    WebGL2_pars_fragment,
 };
 
 /**

@@ -1,26 +1,10 @@
-import * as THREE from 'three';
 import LayerUpdateState from 'Layer/LayerUpdateState';
 import ObjectRemovalHelper from 'Process/ObjectRemovalHelper';
 import handlingError from 'Process/handlerNodeError';
 import Coordinates from 'Core/Geographic/Coordinates';
+import { geoidLayerIsVisible } from 'Layer/GeoidLayer';
 
 const coord = new Coordinates('EPSG:4326', 0, 0, 0);
-
-function assignLayer(object, layer) {
-    if (object) {
-        object.layer = layer;
-        if (object.material) {
-            object.material.transparent = layer.opacity < 1.0;
-            object.material.opacity = layer.opacity;
-            object.material.wireframe = layer.wireframe;
-        }
-        object.layers.set(layer.threejsLayer);
-        for (const c of object.children) {
-            assignLayer(c, layer);
-        }
-        return object;
-    }
-}
 
 export default {
     update(context, layer, node) {
@@ -36,13 +20,13 @@ export default {
         if (node.layerUpdateState[layer.id] === undefined) {
             node.layerUpdateState[layer.id] = new LayerUpdateState();
         } else if (!node.layerUpdateState[layer.id].canTryUpdate()) {
+            // toggle visibility features
+            node.link[layer.id]?.forEach((f) => {
+                f.layer.object3d.add(f);
+                f.meshes.position.z = geoidLayerIsVisible(layer.parent) ? node.geoidHeight : 0;
+                f.meshes.updateMatrixWorld();
+            });
             return;
-        }
-
-        const features = node.children.filter(n => n.layer == layer);
-
-        if (features.length > 0) {
-            return features;
         }
 
         const extentsDestination = node.getExtentsByProjection(layer.source.crs) || [node.extent];
@@ -50,6 +34,8 @@ export default {
         const zoomDest = extentsDestination[0].zoom;
 
         // check if it's tile level is equal to display level layer.
+        // TO DO updata at all level asked
+        // if ((zoomDest < layer.zoom.min && zoomDest > layer.zoom.max) ||
         if (zoomDest != layer.zoom.min ||
         // check if there's data in extent tile.
             !this.source.extentInsideLimit(node.extent, zoomDest) ||
@@ -66,35 +52,36 @@ export default {
             layer,
             extentsSource: extentsDestination,
             view: context.view,
-            threejsLayer: layer.threejsLayer,
             requester: node,
         };
 
-        return context.scheduler.execute(command).then((result) => {
-            // if request return empty json, WFSProvider.getFeatures return undefined
-            result = result[0];
-            if (result) {
-                assignLayer(result, layer);
-                // call onMeshCreated callback if needed
-                if (layer.onMeshCreated) {
-                    layer.onMeshCreated(result);
+        return context.scheduler.execute(command).then((featureMeshes) => {
+            node.layerUpdateState[layer.id].noMoreUpdatePossible();
+
+            featureMeshes.forEach((featureMesh) => {
+                if (featureMesh) {
+                    node.link[layer.id] = node.link[layer.id] || [];
+                    featureMesh.as(context.view.referenceCrs);
+                    featureMesh.meshes.position.z = geoidLayerIsVisible(layer.parent) ? node.geoidHeight : 0;
+                    featureMesh.updateMatrixWorld();
+
+                    if (layer.onMeshCreated) {
+                        layer.onMeshCreated(featureMesh, context);
+                    }
+
+                    if (!node.parent) {
+                        // TODO: Clean cache needs a refactory, because it isn't really efficient and used
+                        ObjectRemovalHelper.removeChildrenAndCleanupRecursively(layer, featureMesh);
+                    } else {
+                        layer.object3d.add(featureMesh);
+                        node.link[layer.id].push(featureMesh);
+                    }
+                    featureMesh.layer = layer;
+                } else {
+                    // TODO: verify if it's possible the featureMesh is undefined.
+                    node.layerUpdateState[layer.id].failure(1, true);
                 }
-                node.layerUpdateState[layer.id].success();
-                if (!node.parent) {
-                    ObjectRemovalHelper.removeChildrenAndCleanupRecursively(layer, result);
-                    return;
-                }
-                // remove old group layer
-                node.remove(...node.children.filter(c => c.layer && c.layer.id == layer.id));
-                const group = new THREE.Group();
-                group.layer = layer;
-                group.matrixWorld.copy(node.matrixWorld).invert();
-                group.matrixWorld.decompose(group.position, group.quaternion, group.scale);
-                node.add(group.add(result));
-                group.updateMatrixWorld(true);
-            } else {
-                node.layerUpdateState[layer.id].failure(1, true);
-            }
+            });
         },
         err => handlingError(err, node, layer, node.level, context.view));
     },

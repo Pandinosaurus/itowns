@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import Extent from 'Core/Geographic/Extent';
+import ObjectRemovalHelper from 'Process/ObjectRemovalHelper';
+import { C3DTilesBoundingVolumeTypes } from 'Core/3DTiles/C3DTilesEnums';
+import { C3DTILES_LAYER_EVENTS } from '../Layer/C3DTilesLayer';
+
+/** @module 3dTilesProcessing
+*/
 
 function requestNewTile(view, scheduler, geometryLayer, metadata, parent, redraw) {
     const command = {
@@ -12,6 +17,8 @@ function requestNewTile(view, scheduler, geometryLayer, metadata, parent, redraw
         metadata,
         redraw,
     };
+
+    geometryLayer.dispatchEvent({ type: C3DTILES_LAYER_EVENTS.ON_TILE_REQUESTED, metadata });
 
     return scheduler.execute(command);
 }
@@ -29,27 +36,6 @@ function subdivideNode(context, layer, node, cullingTest) {
         // Substractive refinement on the other hand requires to replace
         // node with all of its children
         _subdivideNodeSubstractive(context, layer, node);
-    }
-}
-
-const tmpBox3 = new THREE.Box3();
-const tmpSphere = new THREE.Sphere();
-function boundingVolumeToExtent(crs, volume, transform) {
-    if (volume.region) {
-        const box = tmpBox3.copy(volume.region.box3D)
-            .applyMatrix4(volume.region.matrixWorld);
-        return Extent.fromBox3(crs, box);
-    } else if (volume.box) {
-        const box = tmpBox3.copy(volume.box).applyMatrix4(transform);
-        return Extent.fromBox3(crs, box);
-    } else {
-        const sphere = tmpSphere.copy(volume.sphere).applyMatrix4(transform);
-        return new Extent(crs, {
-            west: sphere.center.x - sphere.radius,
-            east: sphere.center.x + sphere.radius,
-            south: sphere.center.y - sphere.radius,
-            north: sphere.center.y + sphere.radius,
-        });
     }
 }
 
@@ -77,11 +63,6 @@ function _subdivideNodeAdditive(context, layer, node, cullingTest) {
         child.promise = requestNewTile(context.view, context.scheduler, layer, child, node, true).then((tile) => {
             node.add(tile);
             tile.updateMatrixWorld();
-
-            const extent = boundingVolumeToExtent(layer.extent.crs, tile.boundingVolume, tile.matrixWorld);
-            tile.traverse((obj) => {
-                obj.extent = extent;
-            });
             layer.onTileContentLoaded(tile);
 
             context.view.notifyChange(child);
@@ -106,6 +87,7 @@ function _subdivideNodeSubstractive(context, layer, node) {
                     childrenTiles[i].loaded = true;
                     node.add(tile);
                     tile.updateMatrixWorld();
+                    // TODO: remove because cannot happen?
                     if (node.additiveRefinement) {
                         context.view.notifyChange(node);
                     }
@@ -120,6 +102,15 @@ function _subdivideNodeSubstractive(context, layer, node) {
     }
 }
 
+/**
+ * Check if the node is visible in the camera.
+ *
+ * @param      {C3DTilesLayer} layer       node 3D tiles layer
+ * @param      {Camera}   camera           camera
+ * @param      {THREE.Object3D}   node             The 3d tile node to check.
+ * @param      {THREE.Matrix4}   tileMatrixWorld  The node matrix world
+ * @return     {boolean}  return true if the node is visible
+ */
 export function $3dTilesCulling(layer, camera, node, tileMatrixWorld) {
     // For viewer Request Volume
     // https://github.com/AnalyticalGraphicsInc/3d-tiles-samples/tree/master/tilesets/TilesetWithRequestVolume
@@ -129,12 +120,8 @@ export function $3dTilesCulling(layer, camera, node, tileMatrixWorld) {
     }
 
     // For bounding volume
-    if (node.boundingVolume &&
-        node.boundingVolume.boundingVolumeCulling(camera, tileMatrixWorld)) {
-        return true;
-    }
-
-    return false;
+    return !!(node.boundingVolume &&
+        node.boundingVolume.boundingVolumeCulling(camera, tileMatrixWorld));
 }
 
 // Cleanup all 3dtiles|three.js starting from a given node n.
@@ -157,7 +144,7 @@ function cleanup3dTileset(layer, n, depth = 0) {
         // skip non-tiles elements
         if (!n.children[i].content) {
             if (canCleanCompletely) {
-                n.children[i].traverse(_cleanupObject3D);
+                ObjectRemovalHelper.removeChildrenAndCleanupRecursively(n.children[i].layer, n.children[i]);
             }
         } else {
             cleanup3dTileset(layer, n.children[i], depth + 1);
@@ -183,36 +170,12 @@ function cleanup3dTileset(layer, n, depth = 0) {
     }
 }
 
-// This function is used to cleanup a Object3D hierarchy.
-// (no 3dtiles spectific code here because this is managed by cleanup3dTileset)
-function _cleanupObject3D(n) {
-    // all children of 'n' are raw Object3D
-    for (const child of n.children) {
-        _cleanupObject3D(child);
-    }
-    // free resources
-    if (n.material) {
-        // material can be either a THREE.Material object, or an array of
-        // THREE.Material objects
-        if (Array.isArray(n.material)) {
-            for (const material of n.material) {
-                material.dispose();
-            }
-        } else {
-            n.material.dispose();
-        }
-    }
-    if (n.geometry) {
-        n.geometry.dispose();
-    }
-    n.remove(...n.children);
-}
-
 // this is a layer
-export function pre3dTilesUpdate() {
+export function pre3dTilesUpdate(context) {
     if (!this.visible) {
         return [];
     }
+    this.scale = context.camera._preSSE;
 
     // Elements removed are added in the layer._cleanableTiles list.
     // Since we simply push in this array, the first item is always
@@ -244,18 +207,13 @@ const boundingVolumeBox = new THREE.Box3();
 const boundingVolumeSphere = new THREE.Sphere();
 export function computeNodeSSE(camera, node) {
     node.distance = 0;
-    if (node.boundingVolume.region) {
-        boundingVolumeBox.copy(node.boundingVolume.region.box3D);
-        boundingVolumeBox.applyMatrix4(node.boundingVolume.region.matrixWorld);
-        node.distance = boundingVolumeBox.distanceToPoint(camera.camera3D.position);
-    } else if (node.boundingVolume.box) {
-        // boundingVolume.box is affected by matrixWorld
-        boundingVolumeBox.copy(node.boundingVolume.box);
+    if (node.boundingVolume.initialVolumeType === C3DTilesBoundingVolumeTypes.box) {
+        boundingVolumeBox.copy(node.boundingVolume.volume);
         boundingVolumeBox.applyMatrix4(node.matrixWorld);
         node.distance = boundingVolumeBox.distanceToPoint(camera.camera3D.position);
-    } else if (node.boundingVolume.sphere) {
-        // boundingVolume.sphere is affected by matrixWorld
-        boundingVolumeSphere.copy(node.boundingVolume.sphere);
+    } else if (node.boundingVolume.initialVolumeType === C3DTilesBoundingVolumeTypes.sphere ||
+               node.boundingVolume.initialVolumeType === C3DTilesBoundingVolumeTypes.region) {
+        boundingVolumeSphere.copy(node.boundingVolume.volume);
         boundingVolumeSphere.applyMatrix4(node.matrixWorld);
         // TODO: see https://github.com/iTowns/itowns/issues/800
         node.distance = Math.max(0.0,
@@ -277,8 +235,6 @@ export function init3dTilesLayer(view, scheduler, layer, rootTile) {
             tile.updateMatrixWorld();
             layer.tileset.tiles[tile.tileId].loaded = true;
             layer.root = tile;
-            layer.extent = boundingVolumeToExtent(layer.crs || view.referenceCrs,
-                tile.boundingVolume, tile.matrixWorld);
             layer.onTileContentLoaded(tile);
         });
 }
@@ -299,6 +255,16 @@ function markForDeletion(layer, elt) {
     }
 }
 
+/**
+ * This funcion builds the method to update 3d tiles node.
+ *
+ * The returned method checks the 3d tile visibility with `cullingTest` function.
+ * It subdivises visible node if `subdivisionTest` return `true`.
+ *
+ * @param      {Function}  [cullingTest=$3dTilesCulling]                 The culling test method.
+ * @param      {Function}  [subdivisionTest=$3dTilesSubdivisionControl]  The subdivision test method.
+ * @return     {Function}    { description_of_the_return_value }
+ */
 export function process3dTilesNode(cullingTest = $3dTilesCulling, subdivisionTest = $3dTilesSubdivisionControl) {
     return function _process3dTilesNodes(context, layer, node) {
         // early exit if parent's subdivision is in progress
@@ -338,6 +304,17 @@ export function process3dTilesNode(cullingTest = $3dTilesCulling, subdivisionTes
     };
 }
 
+/**
+ *
+ *
+ * the method returns true if the `node` should be subivised.
+ *
+ * @param      {object}   context  The current context
+ * @param      {Camera}   context.camera  The current camera
+ * @param      {C3DTilesLayer}   layer  The 3d tile layer
+ * @param      {THREE.Object3D}  node  The 3d tile node
+ * @return     {boolean}
+ */
 export function $3dTilesSubdivisionControl(context, layer, node) {
     if (layer.tileset.tiles[node.tileId].children === undefined) {
         return false;
@@ -348,3 +325,5 @@ export function $3dTilesSubdivisionControl(context, layer, node) {
     const sse = computeNodeSSE(context.camera, node);
     return sse > layer.sseThreshold;
 }
+
+

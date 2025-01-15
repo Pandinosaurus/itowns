@@ -1,4 +1,4 @@
-const assert = require('assert');
+import assert from 'assert';
 
 describe('misc_clamp_ground', function _() {
     let result;
@@ -30,7 +30,10 @@ describe('misc_clamp_ground', function _() {
             // compute the on screen cone position
             const coneCenter = new itowns.THREE.Vector3(0, 0, 0)
                 .applyMatrix4(view.mesh.matrixWorld);
-            coneCenter.applyMatrix4(view.camera._viewMatrix);
+
+            const viewMatrix = new itowns.THREE.Matrix4().multiplyMatrices(view.camera3D.projectionMatrix, view.camera3D.matrixWorldInverse);
+
+            coneCenter.applyMatrix4(viewMatrix);
             const mouse = view.normalizedToViewCoords(coneCenter);
 
             // So read the depth buffer at cone's position
@@ -63,7 +66,7 @@ describe('misc_clamp_ground', function _() {
 
         // get range with depth buffer
         const depthMethod = await page.evaluate(() => view
-            .getPickingPositionFromDepth().distanceTo(view.camera.camera3D.position));
+            .getPickingPositionFromDepth().distanceTo(view.camera3D.position));
 
         assert.ok(Math.abs(controlsMethod - destRange) / destRange < 0.002);
         assert.ok(Math.abs(depthMethod - destRange) / destRange < 0.002);

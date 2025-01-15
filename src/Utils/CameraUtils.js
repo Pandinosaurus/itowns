@@ -5,8 +5,9 @@ import { MAIN_LOOP_EVENTS } from 'Core/MainLoop';
 import Coordinates from 'Core/Geographic/Coordinates';
 import Ellipsoid from 'Core/Math/Ellipsoid';
 import OBB from 'Renderer/OBB';
+import { VIEW_EVENTS } from 'Core/View';
 
-THREE.Object3D.DefaultUp.set(0, 0, 1);
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const targetPosition = new THREE.Vector3();
 const targetCoord = new Coordinates('EPSG:4326', 0, 0, 0);
 const ellipsoid = new Ellipsoid();
@@ -82,7 +83,7 @@ class CameraRig extends THREE.Object3D {
         this.add(this.seaLevel);
         this.seaLevel.add(this.target);
         this.target.add(this.camera);
-        // sea level's geograohic coordinate
+        // target's geographic coordinate
         this.coord = new Coordinates('EPSG:4978', 0, 0);
         // sea level's worldPoistion
         this.targetWorldPosition = new THREE.Vector3();
@@ -100,6 +101,13 @@ class CameraRig extends THREE.Object3D {
         } else {
             this.camera.matrixWorld.decompose(camera.position, camera.quaternion, camera.scale);
         }
+        view.dispatchEvent({
+            type: VIEW_EVENTS.CAMERA_MOVED,
+            coord: this.coord,
+            range: this.range,
+            heading: this.heading,
+            tilt: this.tilt,
+        });
     }
 
     setProxy(view, camera) {
@@ -121,9 +129,13 @@ class CameraRig extends THREE.Object3D {
     }
 
     setTargetFromCoordinate(view, coord) {
-        // clamp altitude to seaLevel
+        // compute precise coordinate (coord) altitude and clamp it above seaLevel
         coord.as(tileLayer(view).extent.crs, this.coord);
-        const altitude = Math.max(0, this.coord.z);
+        const altitude = Math.max(0, DEMUtils.getElevationValueAt(
+            tileLayer(view),
+            this.coord,
+            DEMUtils.PRECISE_READ_Z,
+        ) || this.coord.z);
         this.coord.z = altitude;
         // adjust target's position with clamped altitude
         this.coord.as(view.referenceCrs).toVector3(targetPosition);
@@ -142,7 +154,10 @@ class CameraRig extends THREE.Object3D {
 
     // set rig's objects transformation from camera's position and target's position
     setFromPositions(view, cameraPosition) {
-        this.setTargetFromCoordinate(view, new Coordinates(view.referenceCrs, targetPosition));
+        this.setTargetFromCoordinate(
+            view,
+            new Coordinates(view.referenceCrs).setFromVector3(targetPosition),
+        );
         this.target.rotation.set(0, 0, 0);
         this.updateMatrixWorld(true);
         this.camera.position.copy(cameraPosition);
@@ -222,7 +237,7 @@ class CameraRig extends THREE.Object3D {
             this.end.target.rotation.z = this.start.target.rotation.z + difference - Math.sign(difference) * 2 * Math.PI;
         }
 
-        animations.push(new TWEEN.Tween(factor, tweenGroup).to({ t: 1 }, time)
+        animations.push(new TWEEN.Tween(factor).to({ t: 1 }, time)
             .easing(params.easing)
             .onUpdate((d) => {
                 // rotate to coord destination in geocentric projection
@@ -239,20 +254,22 @@ class CameraRig extends THREE.Object3D {
 
         // translate to coordinate destination in planar projection
         if (view.referenceCrs != 'EPSG:4978') {
-            animations.push(new TWEEN.Tween(this.position, tweenGroup)
+            animations.push(new TWEEN.Tween(this.position)
                 .to(this.end.position, time)
                 .easing(params.easing));
         }
 
         // translate to altitude zero
-        animations.push(new TWEEN.Tween(this.seaLevel.position, tweenGroup)
+        animations.push(new TWEEN.Tween(this.seaLevel.position)
             .to(this.end.seaLevel.position, time)
             .easing(params.easing));
 
         // translate camera position
-        animations.push(new TWEEN.Tween(this.camera.position, tweenGroup)
+        animations.push(new TWEEN.Tween(this.camera.position)
             .to(this.end.camera.position, time)
             .easing(params.easing));
+
+        tweenGroup.add(...animations);
 
         // update animations, transformation and view
         this.animationFrameRequester = () => {
@@ -325,7 +342,7 @@ class CameraRig extends THREE.Object3D {
 }
 
 export function getRig(camera) {
-    rigs[camera.uuid] = rigs[camera.uuid] || new CameraRig(camera);
+    rigs[camera.uuid] = rigs[camera.uuid] || new CameraRig();
     return rigs[camera.uuid];
 }
 
@@ -343,7 +360,7 @@ export default {
      * @property {boolean} [proxy=true] use proxy to handling camera's transformation. if proxy == true, other camera's transformation stops rig's transformation
      * @property {Number} [easing=TWEEN.Easing.Quartic.InOut] in and out easing animation
      * @property {function} [callback] callback call each animation's frame (params are current cameraTransform and worldTargetPosition)
-     * @property {boolean} [stopPlaceOnGroundAtEnd=defaultStopPlaceOnGroundAtEnd] stop place target on the ground at animation ending
+     * @property {boolean} [stopPlaceOnGroundAtEnd=false] stop place target on the ground at animation ending
      */
     /**
      * Default value for option to stop place target
@@ -405,7 +422,7 @@ export default {
      * Compute the CameraTransformOptions that allow a given camera to display a given extent in its entirety.
      *
      * @param   {View}    view    The camera view
-     * @param   {Camera}  camera  The camera to get the CameraTransformOptions from
+     * @param   {THREE.Camera}  camera  The camera to get the CameraTransformOptions from
      * @param   {Extent}  extent  The extent the camera must display
      *
      * @return  {CameraUtils~CameraTransformOptions}   The CameraTransformOptions allowing camera to display the extent.
@@ -427,7 +444,7 @@ export default {
             dimensions = { x: size.y, y: size.x };
         } else {
             extent = extent.as(view.referenceCrs);
-            dimensions = extent.dimensions();
+            dimensions = extent.planarDimensions();
         }
 
         extent.center(cameraTransformOptions.coord);
@@ -445,7 +462,7 @@ export default {
             cameraTransformOptions.range = 1000;
         } else if (camera.isPerspectiveCamera) {
             // setup range for camera placement
-            const verticalFOV = THREE.Math.degToRad(camera.fov);
+            const verticalFOV = THREE.MathUtils.degToRad(camera.fov);
             if (dimensions.x / dimensions.y > camera.aspect) {
                 const focal = (view.domElement.clientHeight * 0.5) / Math.tan(verticalFOV * 0.5);
                 const horizontalFOV = 2 * Math.atan(view.domElement.clientWidth * 0.5 / focal);
@@ -474,14 +491,14 @@ export default {
             rig.setProxy(view, camera);
         }
         return rig.animateCameraToLookAtTarget(view, camera, params).promise.then((finished) => {
-            const params = rig.getParams();
             const stopPlaceOnGround = params.stopPlaceOnGroundAtEnd === undefined ?
                 this.defaultStopPlaceOnGroundAtEnd : params.stopPlaceOnGroundAtEnd;
+            const newTransformation = rig.getParams();
             if (stopPlaceOnGround) {
                 rig.stop(view);
             }
-            params.finished = finished;
-            return params;
+            newTransformation.finished = finished;
+            return newTransformation;
         });
     },
 
