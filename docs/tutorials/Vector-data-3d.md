@@ -1,5 +1,5 @@
 The goal of this tutorial is to give a brief example on how to use iTowns to visualize some vector data as 3D objects.
-These vector data shall represent buildings and be displayed on the `GlobeView` we created in the [WGS84 tutorial]{@tutorial Raster-data-WGS84}.
+The vector data we will use in this tutorial represent buildings and will be displayed on the `GlobeView` we created in the [WGS84 tutorial]{@tutorial Raster-data-WGS84}.
 
 ## Preparing the field
 
@@ -23,7 +23,7 @@ layer to a more precise one.
      </head>
      <body>
         <div id="viewerDiv"></div>
-        <script src="js/itowns.js"></script>
+        <script src="../dist/itowns.js"></script>
         <script type="text/javascript">
             var viewerDiv = document.getElementById('viewerDiv');
             var placement = {
@@ -32,23 +32,23 @@ layer to a more precise one.
                 tilt: 20,
             };
             var view = new itowns.GlobeView(viewerDiv, placement);
-            
+
             var colorSource = new itowns.WMTSSource({
-                url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wmts',
+                url: 'https://data.geopf.fr/wmts?',
                 crs: 'EPSG:3857',
                 name: 'ORTHOIMAGERY.ORTHOPHOTOS',
                 tileMatrixSet: 'PM',
                 format: 'image/jpeg'
             });
-            
+
             var colorLayer = new itowns.ColorLayer('Ortho', {
                 source: colorSource,
             });
-            
+
             view.addLayer(colorLayer);
-            
+
             var elevationSource = new itowns.WMTSSource({
-                url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wmts',
+                url: 'https://data.geopf.fr/wmts?',
                 crs: 'EPSG:4326',
                 name: 'ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES',
                 tileMatrixSet: 'WGS84G',
@@ -80,11 +80,11 @@ layer to a more precise one.
                     }
                 }
             });
-            
+
             var elevationLayer = new itowns.ElevationLayer('MNT_WORLD', {
                 source: elevationSource,
             });
-            
+
             view.addLayer(elevationLayer);
         </script>
      </body>
@@ -93,18 +93,22 @@ layer to a more precise one.
 
 ## Adding a GeometryLayer
 
-We want to create and add a layer containing geometries. The best candidate here
-is `{@link FeatureGeometryLayer}`, which is a pre-made type of `{@link GeometryLayer}` 
-adapted to our use case. Reading the documentation, adding this type
-of layer is similar to the other layers. So before declaring the layer, let's
-instantiate the source.
+We will use a WFS stream that provides buildings footprints geometries and altitude information for each building. 
+We will display the buildings by extruding the building footprints to the altitude value. iTowns provides a specific
+layer for such usecases: `{@link FeatureGeometryLayer}` (which is a pre-configured type of `{@link GeometryLayer}`).
+Before creating this layer, let's instantiate the data source:
 
 ```js
+
 var geometrySource = new itowns.WFSSource({
-    url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wfs?',
-    typeName: 'BDTOPO_BDD_WLD_WGS84G:bati_indifferencie',
+    url: 'https://data.geopf.fr/wfs/ows?',
+    version: '2.0.0',
+    typeName: 'BDTOPO_V3:batiment',
     crs: 'EPSG:4326',
+    ipr: 'IGN',
+    format: 'application/json',
 });
+
 ```
 
 With our source instantiated, we can create our `FeatureGeometryLayer`, giving it the usual `id` and `source` parameters :
@@ -118,15 +122,15 @@ var geometryLayer = new itowns.FeatureGeometryLayer('Buildings', {
 view.addLayer(geometryLayer);
 ```
 
-We also added a minimal `zoom` parameter to prevent our data being displayed under a certain 
-zoom level at which we would be too far from the data to distinguish them.
+We also added a minimal `zoom` parameter to prevent our data being displayed before a certain 
+zoom level at which we would be too far from the data to distinguish the buildings.
 
 Trying this code will result visually in the following.
 
 ![geometry_layer_without_altitude](images/Vector-data-3d-1.png)
 
 We can see the polygons fetched from the data source, each representing a building.
-However, these polygons are not on the ground.
+However, these polygons are not yet placed on the ground.
 Indeed, they were placed after the 3D positions stored in the data, which in our case represent points on the roof of buildings.
 So let's start modifying these polygons' altitude to place them on the ground !
 
@@ -143,19 +147,22 @@ function setAltitude(properties) {
 }
 
 var geometrySource = new itowns.WFSSource({
-    url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wfs?',
-    typeName: 'BDTOPO_BDD_WLD_WGS84G:bati_indifferencie',
+    url: 'https://data.geopf.fr/wfs/ows?',
+    version: '2.0.0',
+    typeName: 'BDTOPO_V3:batiment',
     crs: 'EPSG:4326',
+    ipr: 'IGN',
+    format: 'application/json',
 });
 
 var geometryLayer = new itowns.FeatureGeometryLayer('Buildings', {
     source: geometrySource,
     zoom: { min: 14 },
-    style: new itowns.Style({
+    style: {
         fill: {
             base_altitude: setAltitude,
         }
-    }),
+    },
 });
 
 view.addLayer(geometryLayer);
@@ -177,16 +184,15 @@ z_max: 83.7
 z_min: 83.7
 ```
 
-Reading the documentation of the database we are querying ([section 9.1, page
-84](http://professionnels.ign.fr/doc/DC_BDTOPO_3-0.pdf), in French), we have an
+Reading the documentation of the database we are querying ([section 7.2, page
+66](https://geoservices.ign.fr/sites/default/files/2024-02/DC_BDTOPO_3-3_0.pdf), in French), we have an
 explanation on each property. To help us place the data correctly, let's use the
-`z_min` and the `hauteur` properties. 
-The first one corresponds to the altitude of the building roof, and the second one specifies its height.
-We can therefore set the base altitude of our buildings by removing the value of `hauteur` to the value of `z_min` :
+`altitude_minimale_sol` property. 
+It corresponds to the minimal altitude of the building floor.
 
 ```js
 function setAltitude(properties) {
-    return properties.z_min - properties.hauteur;
+    return properties.altitude_minimale_sol;
 }
 ```
 Now we can't see completely our buildings. What can we do about that
@@ -205,27 +211,30 @@ function setExtrusion(properties) {
 }
 
 var geometrySource = new itowns.WFSSource({
-    url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wfs?',
-    typeName: 'BDTOPO_BDD_WLD_WGS84G:bati_indifferencie',
+    url: 'https://data.geopf.fr/wfs/ows?',
+    version: '2.0.0',
+    typeName: 'BDTOPO_V3:batiment',
     crs: 'EPSG:4326',
+    ipr: 'IGN',
+    format: 'application/json',
 });
 
 var geometryLayer = new itowns.FeatureGeometryLayer('Buildings', {
     source: geometrySource,
     zoom: { min: 14 },
-    style: new itowns.Style({
+    style: {
         fill: {
             base_altitude: setAltitude,
             extrusion_height: setExtrusion,
         }
-    }),
+    },
 });
 
 view.addLayer(geometryLayer);
 ```
 
 The parameter `properties` of the `setExtrusion` method is the same as in
-`setAltitude`. We noticed there is a `hauteur` (`height` in French) property that
+`setAltitude`. We noticed there is a `hauteur` (height) property that
 we could use to set the height of the building. Moving around with this gives a
 nice view of our buildings :
 
@@ -243,21 +252,24 @@ function setColor(properties) {
 }
 
 var geometrySource = new itowns.WFSSource({
-    url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wfs?',
-    typeName: 'BDTOPO_BDD_WLD_WGS84G:bati_indifferencie',
+    url: 'https://data.geopf.fr/wfs/ows?',
+    version: '2.0.0',
+    typeName: 'BDTOPO_V3:batiment',
     crs: 'EPSG:4326',
+    ipr: 'IGN',
+    format: 'application/json',
 });
 
 var geometryLayer = new itowns.FeatureGeometryLayer('Buildings', {
     source: geometrySource,
     zoom: { min: 14 },
-    style: new itowns.Style({
+    style: {
         fill: {
             color: setColor,
             base_altitude: setAltitude,
             extrusion_height: setExtrusion,
         },
-    }),
+    },
 });
 
 view.addLayer(geometryLayer);
@@ -288,7 +300,7 @@ on a `GlobeView`, and change the appearance and positioning of this layer. Here 
      </head>
      <body>
         <div id="viewerDiv"></div>
-        <script src="js/itowns.js"></script>
+        <script src="../dist/itowns.js"></script>
         <script type="text/javascript">
             var viewerDiv = document.getElementById('viewerDiv');
             var placement = {
@@ -299,7 +311,7 @@ on a `GlobeView`, and change the appearance and positioning of this layer. Here 
             var view = new itowns.GlobeView(viewerDiv, placement);
 
             var colorSource = new itowns.WMTSSource({
-                url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wmts',
+                url: 'https://data.geopf.fr/wmts?',
                 crs: 'EPSG:3857',
                 name: 'ORTHOIMAGERY.ORTHOPHOTOS',
                 tileMatrixSet: 'PM',
@@ -313,7 +325,7 @@ on a `GlobeView`, and change the appearance and positioning of this layer. Here 
             view.addLayer(colorLayer);
 
             var elevationSource = new itowns.WMTSSource({
-                url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wmts',
+                url: 'https://data.geopf.fr/wmts?',
                 crs: 'EPSG:4326',
                 name: 'ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES',
                 tileMatrixSet: 'WGS84G',
@@ -353,7 +365,7 @@ on a `GlobeView`, and change the appearance and positioning of this layer. Here 
             view.addLayer(elevationLayer);
 
             function setAltitude(properties) {
-                return properties.z_min - properties.hauteur;
+                return properties.altitude_minimale_sol;
             }
 
             function setExtrusion(properties) {
@@ -364,22 +376,26 @@ on a `GlobeView`, and change the appearance and positioning of this layer. Here 
                 return new itowns.THREE.Color(0xaaaaaa);
             }
 
+
             var geometrySource = new itowns.WFSSource({
-                url: 'http://wxs.ign.fr/3ht7xcw6f7nciopo16etuqp2/geoportail/wfs?',
-                typeName: 'BDTOPO_BDD_WLD_WGS84G:bati_indifferencie',
+                url: 'https://data.geopf.fr/wfs/ows?',
+                version: '2.0.0',
+                typeName: 'BDTOPO_V3:batiment',
                 crs: 'EPSG:4326',
+                ipr: 'IGN',
+                format: 'application/json',
             });
 
             var geometryLayer = new itowns.FeatureGeometryLayer('Buildings', {
                 source: geometrySource,
                 zoom: { min: 14 },
-                style: new itowns.Style({
+                style: {
                     fill: {
                         color: setColor,
                         base_altitude: setAltitude,
                         extrusion_height: setExtrusion,
                     },
-                }),
+                },
             });
 
             view.addLayer(geometryLayer);

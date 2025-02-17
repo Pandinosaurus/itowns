@@ -1,4 +1,4 @@
-const assert = require('assert');
+import assert from 'assert';
 
 // global variables
 let middleWidth;
@@ -21,13 +21,18 @@ describe('GlobeControls with globe example', function _() {
                     screen.y = Math.floor(screen.y);
                     screen.x = ((screen.x / dim.x) * 2) - 1;
                     screen.y = (-(screen.y / dim.y) * 2) + 1;
-                    raycaster.setFromCamera(screen, view.camera.camera3D);
+                    raycaster.setFromCamera(screen, view.camera3D);
                     target.copy(ellipsoid.intersection(raycaster.ray));
 
                     return target;
                 };
 
-            menuGlobe.gui.remove(cRL);
+            // Hide GUI :
+            debugMenu.gui.remove(cRL);
+            minimap.hide();
+            navigation.hide();
+            searchbar.hide();
+            scale.hide();
         });
 
         middleWidth = await page.evaluate(() => window.innerWidth / 2);
@@ -125,7 +130,7 @@ describe('GlobeControls with globe example', function _() {
         await mouse.move(middleWidth, middleHeight, { steps: 20 });
         await mouse.down({ button: 'middle' });
         await mouse.move(middleWidth, (middleHeight) - 200, { steps: 50 });
-        await mouse.up();
+        await mouse.up({ button: 'middle' });
         const endRange = await page.evaluate(() => Promise.resolve(view.controls.getRange()));
         assert.ok((initialPosition.range - endRange) > 20000000);
     });
@@ -166,7 +171,8 @@ describe('GlobeControls with globe example', function _() {
         }));
 
         await page.evaluate(() => { view.controls.enableDamping = false; });
-        await page.mouse.click(middleWidth, middleHeight, { clickCount: 2, delay: 50 });
+        await page.mouse.click(middleWidth, middleHeight);
+        await page.mouse.click(middleWidth, middleHeight);
         const result = await end.then(er => (initialPosition.range * 0.6) - er);
         assert.ok(Math.abs(result) < 100);
     });
@@ -181,7 +187,7 @@ describe('GlobeControls with globe example', function _() {
                     resolve(view.controls.getRange());
                 }
             });
-            const wheelEvent = new WheelEvent('mousewheel', {
+            const wheelEvent = new WheelEvent('wheel', {
                 deltaY: -50000,
             });
             view.domElement.dispatchEvent(wheelEvent, document);

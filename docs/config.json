@@ -14,6 +14,8 @@
                 "FeatureCollection",
                 "FeatureBuildingOptions",
                 "Style",
+                "StyleOptions",
+                "StyleContext",
                 "Label"
             ],
 
@@ -29,13 +31,15 @@
                 "Extent",
                 "OrientationUtils",
                 "OBB",
-                "DEMUtils"
+                "DEMUtils",
+                "GeoidGrid"
             ],
 
             "Layer": [
                 "Layer",
                 "ColorLayer",
                 "ElevationLayer",
+                "GeoidLayer",
                 "GeometryLayer",
                 "FeatureGeometryLayer",
                 "TiledGeometryLayer",
@@ -44,10 +48,11 @@
                 "OrientedImageLayer",
                 "PointCloudLayer",
                 "PotreeLayer",
+                "CopcLayer",
+                "Potree2Layer",
                 "C3DTilesLayer",
+                "OGC3DTilesLayer",
                 "LabelLayer",
-                "RasterNode",
-
                 "GlobeLayer",
                 "PlanarLayer",
                 "Atmosphere"
@@ -69,7 +74,13 @@
                 "FileSource",
                 "OrientedImageSource",
                 "PotreeSource",
-                "VectorTilesSource"
+                "Potree2Source",
+                "VectorTilesSource",
+                "EntwinePointTileSource",
+                "CopcSource",
+                "OGC3DTilesSource",
+                "OGC3DTilesIonSource",
+                "OGC3DTilesGoogleSource"
             ],
 
             "Provider": [
@@ -79,12 +90,16 @@
 
             "Parser": [
                 "GeoJsonParser",
+                "iGLTFLoader",
                 "GpxParser",
                 "VectorTileParser",
                 "CameraCalibrationParser",
                 "B3dmParser",
                 "ShapefileParser",
-                "LASParser"
+                "LASParser",
+                "GTXParser",
+                "GDFParser",
+                "ISGParser"
             ],
 
             "Converter": [
@@ -104,21 +119,35 @@
             "Renderer": [
                 "OrientedImageMaterial",
                 "Camera",
-                "ShaderChunkManager"
+                "ShaderChunkManager",
+                "RasterTile"
             ],
 
             "3D Tiles": [
+                "3dTilesProcessing",
                 "C3DTileset",
                 "C3DTBatchTable",
                 "C3DTBoundingVolume",
                 "C3DTExtensions",
-                "C3DTBatchTableHierarchyExtension"
+                "C3DTBatchTableHierarchyExtension",
+                "C3DTFeature"
             ],
 
             "Plugins": [
                 "DragNDrop",
                 "FeatureToolTip",
-                "TIFFParser"
+                "TIFFParser",
+                "COGSource",
+                "COGParser"
+            ],
+
+            "Widgets": [
+                "Widget",
+                "Navigation",
+                "Minimap",
+                "Scale",
+                "Searchbar",
+                "C3DTilesStyle"
             ]
         },
         "tutorialSections": {
@@ -145,6 +174,14 @@
             "Vector-data-on-ground": {
                 "sectionTitle": "Vector visualization",
                 "sectionId": 2
+            },
+            "3DTiles-mesh-b3dm": {
+                "sectionTitle": "3D Tiles visualization",
+                "sectionId": 3
+            },
+            "3DTiles-point-cloud-pnts": {
+                "sectionTitle": "3D Tiles visualization",
+                "sectionId": 3
             }
         }
     },
@@ -156,8 +193,9 @@
         }
     },
     "source": {
-        "include": [ "src", "examples/js/plugins" ],
-        "exclude": [ "src/ThreeExtended" ]
+        "include": [ "examples/js/plugins", "packages" ],
+        "exclude": [ "packages/Main/src/ThreeExtended" ],
+        "excludePattern": "(^|\\/|\\\\)lib"
     },
     "plugins": ["plugins/markdown"]
 }
